@@ -1,30 +1,27 @@
 /// Randomised sanity tests: no panics, valid IDs, no duplicates.
 use rand::{Rng, SeedableRng};
-use ringdb::{BackendPreference, QuantizationMode, RingDb, RingDbConfig, RingQuery};
+use ringdb::{RingDb, RingDbConfig, RingQuery, SealedRingDb};
 
-fn random_db(dims: usize, n: usize, seed: u64) -> RingDb {
+fn random_db(dims: usize, n: usize, seed: u64) -> SealedRingDb {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
-    let vecs: Vec<f32> = (0..n * dims).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
-
-    let mut db = RingDb::new(RingDbConfig {
-        dims,
-        backend_preference: BackendPreference::Cpu,
-        quantization: QuantizationMode::None,
-    })
-    .unwrap();
-    db.add_vectors(&vecs).unwrap();
-    db
+    let mut db = RingDb::new(RingDbConfig::new(dims)).unwrap();
+    let mut buf = vec![0.0f32; dims];
+    for _ in 0..n {
+        for x in buf.iter_mut() {
+            *x = rng.gen_range(-1.0f32..1.0);
+        }
+        db.add_vector(&buf).unwrap();
+    }
+    db.build().unwrap()
 }
 
 fn assert_valid_result(ids: &[u32], n_vectors: usize) {
-    // All IDs in range.
     for &id in ids {
         assert!(
             (id as usize) < n_vectors,
             "ID {id} out of range (n={n_vectors})"
         );
     }
-    // No duplicates.
     let mut sorted = ids.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
@@ -86,7 +83,6 @@ fn elapsed_is_non_zero_with_data() {
             lambda: 1.0,
         })
         .unwrap();
-    // elapsed should be at least 1 ns for a non-trivial dataset
     assert!(
         r.elapsed.as_nanos() > 0,
         "elapsed should be > 0 with 1000 vectors"
@@ -95,13 +91,7 @@ fn elapsed_is_non_zero_with_data() {
 
 #[test]
 fn empty_db_returns_empty() {
-    let db = RingDb::new(RingDbConfig {
-        dims: 8,
-        backend_preference: BackendPreference::Cpu,
-        quantization: QuantizationMode::None,
-    })
-    .unwrap();
-    // Query on empty DB should succeed and return no IDs.
+    let db = RingDb::new(RingDbConfig::new(8)).unwrap().build().unwrap();
     let q = vec![0.0f32; 8];
     let r = db
         .query(&RingQuery {
@@ -114,21 +104,16 @@ fn empty_db_returns_empty() {
 }
 
 #[test]
-fn add_vectors_multiple_batches() {
+fn add_vectors_multiple_calls() {
     let dims = 4usize;
-    let mut db = RingDb::new(RingDbConfig {
-        dims,
-        backend_preference: BackendPreference::Cpu,
-        quantization: QuantizationMode::None,
-    })
-    .unwrap();
+    let mut db = RingDb::new(RingDbConfig::new(dims)).unwrap();
 
-    // Add two batches; IDs should be cumulative.
-    db.add_vectors(&[1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
-        .unwrap(); // IDs 0, 1
-    db.add_vectors(&[0.0f32, 0.0, 1.0, 0.0]).unwrap(); // ID 2
+    db.add_vector(&[1.0f32, 0.0, 0.0, 0.0]).unwrap(); // ID 0
+    db.add_vector(&[0.0f32, 1.0, 0.0, 0.0]).unwrap(); // ID 1
+    db.add_vector(&[0.0f32, 0.0, 1.0, 0.0]).unwrap(); // ID 2
 
     assert_eq!(db.len(), 3);
+    let db = db.build().unwrap();
 
     let q = [0.0f32; 4];
     let r = db
@@ -139,6 +124,5 @@ fn add_vectors_multiple_batches() {
         })
         .unwrap();
 
-    // All three unit vectors are at dist=1 from origin.
     assert_eq!(r.ids.len(), 3);
 }

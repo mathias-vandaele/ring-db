@@ -1,14 +1,12 @@
 use clap::Parser;
 use rand::{Rng, SeedableRng};
-use ringdb::{BackendPreference, QueryResult, QuantizationMode, RingDb, RingDbConfig, RingQuery};
+use ringdb::{QueryResult, RingDb, RingDbConfig, RingQuery};
 
 /// ringdb CLI — generate a random dataset and run a ring query.
 ///
-/// Examples:
+/// Example:
 ///
-///   cargo run --example cli -- --n 100000 --dims 64 --backend auto --quant none --d 5.0 --lambda 0.2
-///
-///   cargo run --example cli -- --n 100000 --dims 64 --backend auto --quant q8 --d 5.0 --lambda 0.2
+///   cargo run --example cli -- --n 100000 --dims 64 --d 5.0 --lambda 0.2
 #[derive(Parser)]
 #[command(name = "ringdb-cli", about = "ringdb demo: random dataset ring query")]
 struct Cli {
@@ -28,14 +26,6 @@ struct Cli {
     #[arg(short = 'l', long, default_value_t = 0.5)]
     lambda: f32,
 
-    /// Backend: auto | cpu | wgpu | cuda
-    #[arg(long, default_value = "auto")]
-    backend: String,
-
-    /// Quantization mode: none | q8
-    #[arg(long, default_value = "none")]
-    quant: String,
-
     /// Random seed for reproducibility.
     #[arg(long, default_value_t = 42)]
     seed: u64,
@@ -44,51 +34,42 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    // ---- parse backend preference ----
-    let backend_preference = match cli.backend.to_lowercase().as_str() {
-        "cpu" => BackendPreference::Cpu,
-        "wgpu" => BackendPreference::Wgpu,
-        "cuda" => BackendPreference::Cuda,
-        _ => BackendPreference::Auto,
-    };
-
-    // ---- parse quantization mode ----
-    let quantization = match cli.quant.to_lowercase().as_str() {
-        "q8" => QuantizationMode::Q8,
-        _ => QuantizationMode::None,
-    };
-
-    let config = RingDbConfig {
-        dims: cli.dims,
-        backend_preference,
-        quantization,
-    };
+    let config = RingDbConfig::new(cli.dims);
 
     println!("ringdb demo");
     println!("  dataset : {} vectors × {} dims", cli.n, cli.dims);
-    println!("  quant   : {}", cli.quant);
     println!("  ring    : d={}, λ={}", cli.d, cli.lambda);
     println!();
 
-    // ---- generate random vectors ----
-    let mut rng = rand::rngs::SmallRng::seed_from_u64(cli.seed);
-    let total_floats = cli.n * cli.dims;
-    let vectors: Vec<f32> = (0..total_floats).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
-
-    // ---- build the database ----
     print!("Building database … ");
     let build_start = std::time::Instant::now();
     let mut db = RingDb::new(config).expect("failed to create RingDb");
-    db.add_vectors(&vectors).expect("failed to add vectors");
+
+    let mut rng = rand::rngs::SmallRng::seed_from_u64(cli.seed);
+    let mut buf = vec![0.0f32; cli.dims];
+
+    for x in buf.iter_mut() {
+        *x = rng.gen_range(-1.0f32..1.0);
+    }
+    let query_vec = buf.clone();
+    db.add_vector(&buf).expect("failed to add vector");
+
+    for _ in 1..cli.n {
+        for x in buf.iter_mut() {
+            *x = rng.gen_range(-1.0f32..1.0);
+        }
+        db.add_vector(&buf).expect("failed to add vector");
+    }
+
+    let db = db.build().expect("failed to build");
+
     let build_elapsed = build_start.elapsed();
     println!("done in {:.2?}", build_elapsed);
     println!("  backend : {}", db.backend_name());
     println!();
 
-    // ---- run a ring query (use the first vector as query) ----
-    let query_vec = &vectors[..cli.dims];
     let rq = RingQuery {
-        query: query_vec,
+        query: &query_vec,
         d: cli.d,
         lambda: cli.lambda,
     };

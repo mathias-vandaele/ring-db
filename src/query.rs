@@ -26,7 +26,7 @@ pub struct QueryResult {
     /// (first inserted vector has ID 0).
     pub ids: Vec<u32>,
     /// Name of the backend that executed the query (e.g. `"cpu"`, `"wgpu"`, `"cuda"`).
-    pub backend_used: String,
+    pub backend_used: &'static str,
     /// Wall-clock time for the query (excluding dataset upload).
     pub elapsed: Duration,
 }
