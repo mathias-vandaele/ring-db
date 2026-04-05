@@ -209,7 +209,6 @@ Payloads are designed to consume **zero hot memory** after the build phase:
 
 1. **Build phase** — each call to `add_vector` serializes the payload
    immediately (via `bincode`) and streams it to a temporary file.
-   No `Vec<T>` accumulates in RAM.
 
 2. **Query phase** — after `build()`, the temp file is mmap-ed read-only.
    The OS can page payload bytes out under memory pressure. The only
@@ -232,7 +231,7 @@ Use `T = ()` when no payload is needed — the file is never written in that cas
 │  ┌─────────────────────┐   ┌──────────────────────┐  │
 │  │  vectors: Vec<f32>  │   │  PayloadStoreBuilder │  │
 │  │  norms_sq: Vec<f32> │   │  (BufWriter → tmpfile│  │
-│  └──────────┬──────────┘   └──────────┬─��─────────┘  │
+│  └──────────┬──────────┘   └──────────┬───────────┘  │
 │             │  build()                │              │
 └─────────────┼─────────────────────────┼──────────────┘
               ▼                         ▼
@@ -310,9 +309,6 @@ Fetching all payloads for matching vectors after a query (ring=[6.529, 6.535],
 
 Both are O(hits), not O(dataset), because payloads are addressed by offset
 table and read directly from the mmap.
-
-> Benchmarks show a **95 % improvement** over the previous streaming-decode
-> baseline after switching to mmap-backed cold storage.
 
 ---
 
