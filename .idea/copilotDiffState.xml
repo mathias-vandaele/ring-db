@@ -3,14 +3,6 @@
   <component name="CopilotDiffPersistence">
     <option name="pendingDiffs">
       <map>
-        <entry key="$PROJECT_DIR$/.github/workflows/publish.yml">
-          <value>
-            <PendingDiffInfo>
-              <option name="filePath" value="$PROJECT_DIR$/.github/workflows/publish.yml" />
-              <option name="updatedContent" value="name: Publish crate&#10;&#10;on:&#10;  push:&#10;    tags:&#10;      - 'v*.*.*'&#10;  workflow_dispatch:&#10;&#10;permissions:&#10;  contents: read&#10;&#10;concurrency:&#10;  group: publish-${{ github.ref }}&#10;  cancel-in-progress: false&#10;&#10;jobs:&#10;  publish:&#10;    runs-on: ubuntu-latest&#10;    steps:&#10;      - name: Check out repository&#10;        uses: actions/checkout@v4&#10;&#10;      - name: Install Rust toolchain&#10;        uses: dtolnay/rust-toolchain@stable&#10;&#10;      - name: Cache Cargo registry and build artifacts&#10;        uses: Swatinem/rust-cache@v2&#10;&#10;      - name: Run test suite&#10;        run: cargo test --locked&#10;&#10;      - name: Verify publish package&#10;        run: cargo publish --locked --dry-run&#10;        env:&#10;          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_API_KEY }}&#10;&#10;      - name: Publish to crates.io&#10;        run: cargo publish --locked&#10;        env:&#10;          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_API_KEY }}" />
-            </PendingDiffInfo>
-          </value>
-        </entry>
         <entry key="$PROJECT_DIR$/Cargo.toml">
           <value>
             <PendingDiffInfo>

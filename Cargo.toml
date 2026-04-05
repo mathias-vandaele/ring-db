@@ -1,6 +1,6 @@
 [package]
 name = "ring-db"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A Rust library for ring queries in high-dimensional vector spaces."
 license = "MIT OR Apache-2.0"
