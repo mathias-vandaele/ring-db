@@ -27,7 +27,7 @@ fn test_basic_hits() {
 
     let mut db = cpu_db(2);
     for &(x, y) in pts {
-        db.add_vector(&[x, y]).unwrap();
+        db.add_vector(&[x, y], ()).unwrap();
     }
     let db = db.build().unwrap();
 
@@ -57,9 +57,9 @@ fn test_basic_hits() {
 #[test]
 fn test_lambda_zero() {
     let mut db = cpu_db(2);
-    db.add_vector(&[3.0f32, 0.0]).unwrap();
-    db.add_vector(&[4.0, 0.0]).unwrap();
-    db.add_vector(&[0.0, 3.0]).unwrap();
+    db.add_vector(&[3.0f32, 0.0], ()).unwrap();
+    db.add_vector(&[4.0, 0.0], ()).unwrap();
+    db.add_vector(&[0.0, 3.0], ()).unwrap();
     let db = db.build().unwrap();
 
     let result = db
@@ -78,8 +78,8 @@ fn test_lambda_zero() {
 #[test]
 fn test_no_results() {
     let mut db = cpu_db(2);
-    db.add_vector(&[1.0f32, 0.0]).unwrap();
-    db.add_vector(&[0.0, 1.0]).unwrap();
+    db.add_vector(&[1.0f32, 0.0], ()).unwrap();
+    db.add_vector(&[0.0, 1.0], ()).unwrap();
     let db = db.build().unwrap();
 
     let result = db
@@ -96,10 +96,10 @@ fn test_no_results() {
 #[test]
 fn test_all_results() {
     let mut db = cpu_db(2);
-    db.add_vector(&[1.0, 0.0]).unwrap();
-    db.add_vector(&[0.0, 1.0]).unwrap();
-    db.add_vector(&[-1.0, 0.0]).unwrap();
-    db.add_vector(&[0.0, -1.0]).unwrap();
+    db.add_vector(&[1.0, 0.0], ()).unwrap();
+    db.add_vector(&[0.0, 1.0], ()).unwrap();
+    db.add_vector(&[-1.0, 0.0], ()).unwrap();
+    db.add_vector(&[0.0, -1.0], ()).unwrap();
     let db = db.build().unwrap();
 
     let result = db
@@ -117,7 +117,7 @@ fn test_all_results() {
 fn test_identical_vectors() {
     let mut db = cpu_db(2);
     for _ in 0..5 {
-        db.add_vector(&[3.0f32, 4.0]).unwrap();
+        db.add_vector(&[3.0f32, 4.0], ()).unwrap();
     }
     let db = db.build().unwrap();
 
@@ -135,8 +135,8 @@ fn test_identical_vectors() {
 #[test]
 fn test_d_less_than_lambda() {
     let mut db = cpu_db(2);
-    db.add_vector(&[0.0f32, 0.0]).unwrap();
-    db.add_vector(&[2.0, 0.0]).unwrap();
+    db.add_vector(&[0.0f32, 0.0], ()).unwrap();
+    db.add_vector(&[2.0, 0.0], ()).unwrap();
     let db = db.build().unwrap();
 
     let result = db
@@ -167,7 +167,7 @@ fn test_dims_and_len() {
     assert!(db.is_empty());
 
     for _ in 0..10 {
-        db.add_vector(&[0.0f32; 8]).unwrap();
+        db.add_vector(&[0.0f32; 8], ()).unwrap();
     }
     assert_eq!(db.len(), 10);
     assert!(!db.is_empty());
@@ -182,7 +182,7 @@ fn test_higher_dims() {
         .map(|i| ((i as f32 * 1.6180339) % 2.0) - 1.0)
         .collect();
     for chunk in vecs.chunks(dims) {
-        db.add_vector(chunk).unwrap();
+        db.add_vector(chunk, ()).unwrap();
     }
     let db = db.build().unwrap();
 
@@ -213,4 +213,44 @@ fn test_higher_dims() {
             d + lambda
         );
     }
+}
+
+#[test]
+fn test_payload_roundtrip() {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct Meta {
+        label: String,
+        score: f64,
+    }
+
+    let mut db: RingDb<Meta> = RingDb::new(RingDbConfig::new(2)).unwrap();
+    db.add_vector(&[1.0, 0.0], Meta { label: "dog".into(), score: 0.9 }).unwrap();
+    db.add_vector(&[0.0, 1.0], Meta { label: "cat".into(), score: 0.7 }).unwrap();
+    db.add_vector(&[5.0, 0.0], Meta { label: "bird".into(), score: 0.5 }).unwrap();
+
+    let db = db.build().unwrap();
+
+    let result = db
+        .query(&RingQuery {
+            query: &[0.0, 0.0],
+            d: 1.0,
+            lambda: 0.1,
+        })
+        .unwrap();
+
+    let mut ids = result.ids.clone();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![0, 1]);
+
+    let payloads = db.fetch_payloads(&result.ids).unwrap();
+    assert_eq!(payloads.len(), 2);
+
+    let p0 = db.fetch_payload(0).unwrap();
+    assert_eq!(p0.label, "dog");
+    assert_eq!(p0.score, 0.9);
+
+    let p1 = db.fetch_payload(1).unwrap();
+    assert_eq!(p1.label, "cat");
 }

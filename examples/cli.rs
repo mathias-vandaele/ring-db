@@ -52,13 +52,13 @@ fn main() {
         *x = rng.gen_range(-1.0f32..1.0);
     }
     let query_vec = buf.clone();
-    db.add_vector(&buf).expect("failed to add vector");
+    db.add_vector(&buf, ()).expect("failed to add vector");
 
     for _ in 1..cli.n {
         for x in buf.iter_mut() {
             *x = rng.gen_range(-1.0f32..1.0);
         }
-        db.add_vector(&buf).expect("failed to add vector");
+        db.add_vector(&buf, ()).expect("failed to add vector");
     }
 
     let db = db.build().expect("failed to build");

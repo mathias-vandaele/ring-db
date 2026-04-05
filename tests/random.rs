@@ -10,7 +10,7 @@ fn random_db(dims: usize, n: usize, seed: u64) -> SealedRingDb {
         for x in buf.iter_mut() {
             *x = rng.gen_range(-1.0f32..1.0);
         }
-        db.add_vector(&buf).unwrap();
+        db.add_vector(&buf, ()).unwrap();
     }
     db.build().unwrap()
 }
@@ -91,7 +91,7 @@ fn elapsed_is_non_zero_with_data() {
 
 #[test]
 fn empty_db_returns_empty() {
-    let db = RingDb::new(RingDbConfig::new(8)).unwrap().build().unwrap();
+    let db: SealedRingDb = RingDb::new(RingDbConfig::new(8)).unwrap().build().unwrap();
     let q = vec![0.0f32; 8];
     let r = db
         .query(&RingQuery {
@@ -108,9 +108,9 @@ fn add_vectors_multiple_calls() {
     let dims = 4usize;
     let mut db = RingDb::new(RingDbConfig::new(dims)).unwrap();
 
-    db.add_vector(&[1.0f32, 0.0, 0.0, 0.0]).unwrap(); // ID 0
-    db.add_vector(&[0.0f32, 1.0, 0.0, 0.0]).unwrap(); // ID 1
-    db.add_vector(&[0.0f32, 0.0, 1.0, 0.0]).unwrap(); // ID 2
+    db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], ()).unwrap(); // ID 0
+    db.add_vector(&[0.0f32, 1.0, 0.0, 0.0], ()).unwrap(); // ID 1
+    db.add_vector(&[0.0f32, 0.0, 1.0, 0.0], ()).unwrap(); // ID 2
 
     assert_eq!(db.len(), 3);
     let db = db.build().unwrap();
