@@ -176,8 +176,7 @@ impl<T: Serialize + DeserializeOwned> RingDb<T> {
     /// # Example
     ///
     /// ```no_run
-    /// use ringdb::{RingDb, RingDbConfig, SealedRingDb};
-    /// use ringdb::BackendPreference;
+    /// use ringdb::{RingDb, RingDbConfig, BackendPreference};
     /// use std::path::Path;
     ///
     /// // --- save ---

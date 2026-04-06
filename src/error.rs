@@ -1,4 +1,5 @@
 /// All errors that ringdb can produce.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum RingDbError {
     #[error("dimension mismatch: expected {expected}, got {got}")]

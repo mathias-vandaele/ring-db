@@ -5,7 +5,7 @@ use std::{
     io::{BufWriter, Write},
     marker::PhantomData,
     mem,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -16,6 +16,31 @@ fn new_temp_path() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("ringdb-payloads-{}-{}.bin", std::process::id(), id))
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Flush and close a `BufWriter<File>` wrapped in an `Option`.
+///
+/// Takes the writer out of `slot` so callers don't see a partial flush on drop.
+fn flush_writer(slot: &mut Option<BufWriter<File>>) -> Result<()> {
+    if let Some(writer) = slot.take() {
+        writer.into_inner().map_err(|e| e.into_error())?;
+    }
+    Ok(())
+}
+
+/// Mmap `path` read-only, or return `None` if `total_bytes == 0`.
+///
+/// # Safety
+/// Callers must ensure the file is not modified after this call.
+fn open_mmap(path: &Path, total_bytes: u64) -> Result<Option<Mmap>> {
+    if total_bytes == 0 {
+        return Ok(None);
+    }
+    let file = File::open(path)?;
+    // SAFETY: caller guarantees the file is read-only from this point on.
+    Ok(Some(unsafe { Mmap::map(&file) }?))
 }
 
 /// Write-side of cold payload storage.
@@ -71,20 +96,8 @@ impl<T: Serialize> PayloadStoreBuilder<T> {
     /// After this call, `self` is consumed. The returned [`PayloadStore`]
     /// owns the mmap and is responsible for deleting the temp file on drop.
     pub(crate) fn finish(mut self) -> Result<PayloadStore<T>> {
-        // Flush and close the write handle before opening for reading.
-        if let Some(writer) = self.writer.take() {
-            writer.into_inner().map_err(|e| e.into_error())?;
-        }
-
-        let mmap = if self.cursor == 0 {
-            // T = () or no vectors added: file is empty, no mmap needed.
-            None
-        } else {
-            let file = File::open(&self.temp_path)?;
-            // SAFETY: we own this temp file and never modify it after this point.
-            Some(unsafe { Mmap::map(&file) }?)
-            // `file` is dropped here; Mmap is self-contained on all platforms.
-        };
+        flush_writer(&mut self.writer)?;
+        let mmap = open_mmap(&self.temp_path, self.cursor)?;
 
         // Transfer ownership to PayloadStore and clear our temp_path so
         // Drop does not double-delete the file.
@@ -111,13 +124,10 @@ impl<T: Serialize> PayloadStoreBuilder<T> {
     /// **not** delete them on drop.
     pub(crate) fn finish_persisted(
         mut self,
-        payloads_path: &std::path::Path,
-        offsets_path: &std::path::Path,
+        payloads_path: &Path,
+        offsets_path: &Path,
     ) -> Result<PayloadStore<T>> {
-        // Flush and close the write handle.
-        if let Some(writer) = self.writer.take() {
-            writer.into_inner().map_err(|e| e.into_error())?;
-        }
+        flush_writer(&mut self.writer)?;
 
         // Persist the offset table.
         write_u64_file(offsets_path, &self.offsets)?;
@@ -127,14 +137,7 @@ impl<T: Serialize> PayloadStoreBuilder<T> {
         // Clear temp_path so Drop doesn't try to remove the now-moved file.
         self.temp_path = PathBuf::new();
 
-        // Mmap the persisted payload file.
-        let mmap = if self.cursor == 0 {
-            None
-        } else {
-            let file = File::open(payloads_path)?;
-            // SAFETY: we just wrote this file and will not modify it again.
-            Some(unsafe { Mmap::map(&file) }?)
-        };
+        let mmap = open_mmap(payloads_path, self.cursor)?;
 
         Ok(PayloadStore {
             mmap,
@@ -185,14 +188,7 @@ impl<T: DeserializeOwned> PayloadStore<T> {
 
         // The last entry in `offsets` is the sentinel (total byte size).
         let total_bytes = offsets.last().copied().unwrap_or(0);
-
-        let mmap = if total_bytes == 0 {
-            None
-        } else {
-            let file = File::open(payloads_path)?;
-            // SAFETY: this is a read-only file we do not modify.
-            Some(unsafe { Mmap::map(&file) }?)
-        };
+        let mmap = open_mmap(payloads_path, total_bytes)?;
 
         Ok(PayloadStore {
             mmap,

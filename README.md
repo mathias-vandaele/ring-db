@@ -28,6 +28,7 @@ Three query shapes are supported out of the box:
 - [Quick start](#quick-start)
 - [API overview](#api-overview)
 - [Payload storage](#payload-storage)
+- [Persistence](#persistence)
 - [Architecture](#architecture)
 - [Performance](#performance)
 - [Running the benchmarks](#running-the-benchmarks)
@@ -121,7 +122,10 @@ println!("elapsed: {:?}", result.elapsed);
 ```rust
 use ringdb::{RingDb, RingDbConfig, RangeQuery};
 
-let db = /* build as above */;
+let mut db = RingDb::new(RingDbConfig::new(4)).unwrap();
+db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], ()).unwrap();
+db.add_vector(&[3.0, 4.0, 0.0, 0.0], ()).unwrap();
+let db = db.build().unwrap();
 
 // Find all vectors between distance 3.0 and 6.0 from the query
 let result = db.query_range(&RangeQuery {
@@ -136,7 +140,10 @@ let result = db.query_range(&RangeQuery {
 ```rust
 use ringdb::{RingDb, RingDbConfig, DiskQuery};
 
-let db = /* build as above */;
+let mut db = RingDb::new(RingDbConfig::new(4)).unwrap();
+db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], ()).unwrap();
+db.add_vector(&[3.0, 4.0, 0.0, 0.0], ()).unwrap();
+let db = db.build().unwrap();
 
 // Find all vectors within distance 5.0 from the query (full ball)
 let result = db.query_disk(&DiskQuery {
@@ -157,17 +164,20 @@ struct Document {
     score: f64,
 }
 
-let mut db: RingDb<Document> = RingDb::new(RingDbConfig::new(128)).unwrap();
+let mut db: RingDb<Document> = RingDb::new(RingDbConfig::new(4)).unwrap();
 
-db.add_vector(&embedding_of("Rust programming"), Document {
+db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], Document {
     title: "The Rust Book".into(),
     score: 0.92,
 }).unwrap();
+db.add_vector(&[0.0, 1.0, 0.0, 0.0], Document {
+    title: "Rustonomicon".into(),
+    score: 0.85,
+}).unwrap();
 
-// … insert more vectors …
-
+let query = [0.8f32, 0.0, 0.0, 0.0];
 let db = db.build().unwrap();
-let result = db.query(&RingQuery { query: &my_query, d: 3.5, lambda: 0.2 }).unwrap();
+let result = db.query(&RingQuery { query: &query, d: 0.2, lambda: 0.1 }).unwrap();
 
 // Fetch payloads for matching IDs
 let docs = db.fetch_payloads(&result.ids).unwrap();
@@ -182,22 +192,30 @@ for doc in &docs {
 
 ### `RingDbConfig`
 
-```rust
-let config = RingDbConfig::new(dims);          // CPU backend (default)
+```
+let config = RingDbConfig::new(dims);                             // in-memory, CPU backend (defaults)
+let config = RingDbConfig::new(dims).with_persist_dir("/my/db"); // persisted to disk
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `dims` | `usize` | Number of dimensions per vector. Must be > 0. |
 | `backend_preference` | `BackendPreference` | Backend selection. Only `Cpu` is available today. |
+| `persist_dir` | `Option<PathBuf>` | Directory to persist the database. `None` = in-memory only. |
+
+| Builder method | Description |
+|---|---|
+| `with_persist_dir(path)` | Enable persistence to the given directory (created automatically). |
+| `with_backend_preference(p)` | Override the backend (default: `BackendPreference::Cpu`). |
 
 ### `RingDb<T>` — builder
 
 | Method | Description |
 |---|---|
-| `RingDb::new(config)` | Create an empty database. |
+| `RingDb::new(config)` | Create an empty in-memory (or persist-configured) database. |
+| `RingDb::load(dir, backend)` | Rehydrate a previously persisted database from `dir`. |
 | `add_vector(v, payload)` | Insert one vector and its associated payload. |
-| `build()` | Seal the database; returns `SealedRingDb<T>`. |
+| `build()` | Seal the database; returns `SealedRingDb<T>`. Writes files to disk if `persist_dir` is set. |
 | `len()` / `is_empty()` | Number of staged vectors. |
 | `dims()` / `backend_name()` | Configuration introspection. |
 
@@ -216,7 +234,7 @@ Vectors are assigned sequential IDs starting from **0** in insertion order.
 
 ### `RingQuery<'a>`
 
-```rust
+```
 RingQuery {
     query: &[f32],   // query vector, length == dims
     d: f32,          // centre of the ring (target distance)
@@ -226,7 +244,7 @@ RingQuery {
 
 ### `RangeQuery<'a>`
 
-```rust
+```
 RangeQuery {
     query: &[f32],   // query vector, length == dims
     d_min: f32,      // lower bound of the distance interval (inclusive, ≥ 0)
@@ -236,7 +254,7 @@ RangeQuery {
 
 ### `DiskQuery<'a>`
 
-```rust
+```
 DiskQuery {
     query: &[f32],   // query vector, length == dims
     d_max: f32,      // radius of the ball (inclusive, ≥ 0)
@@ -246,7 +264,7 @@ DiskQuery {
 
 ### `QueryResult`
 
-```rust
+```
 result.ids           // Vec<u32> — matching vector IDs
 result.backend_used  // &'static str — e.g. "cpu"
 result.elapsed       // Duration — wall-clock query time
@@ -256,11 +274,12 @@ result.elapsed       // Duration — wall-clock query time
 
 All fallible operations return `Result<_, RingDbError>`:
 
-```rust
+```
 pub enum RingDbError {
     DimensionMismatch { expected: usize, got: usize },
     Payload(String),   // serialization / deserialization error
     Io(std::io::Error),
+    Corrupt(String),   // missing / inconsistent persistence files
 }
 ```
 
@@ -277,8 +296,91 @@ Payloads are designed to consume **zero hot memory** after the build phase:
    The OS can page payload bytes out under memory pressure. The only
    hot-path data is the offset table (8 bytes × number of vectors).
 
-3. **Cleanup** — the temp file is deleted automatically when `SealedRingDb`
-   is dropped, on all platforms (Windows: mmap is dropped before deletion).
+3. **Cleanup** — when **no** `persist_dir` is set, the temp file is deleted
+   automatically when `SealedRingDb` is dropped. When `persist_dir` is set,
+   the files are kept on disk and can be reloaded later with `RingDb::load()`.
+
+---
+
+## Persistence
+
+ring-db can save the full database to disk and reload it in a later process.
+No re-insertion is required — the original vectors, norms, and payloads are
+reconstructed exactly.
+
+### Saving
+
+Set `persist_dir` on the config before calling `build()`:
+
+```rust
+use ringdb::{RingDb, RingDbConfig};
+
+let mut db = RingDb::<()>::new(
+    RingDbConfig::new(4).with_persist_dir("/tmp/mydb")
+).unwrap();
+
+db.add_vector(&[1.0, 0.0, 0.0, 0.0], ()).unwrap();
+db.add_vector(&[0.0, 1.0, 0.0, 0.0], ()).unwrap();
+
+let _sealed = db.build().unwrap(); // writes files to /tmp/mydb
+```
+
+`build()` creates the directory if it does not exist and writes:
+
+| File | Content |
+|---|---|
+| `meta.bin` | `dims` + `n_vectors` as little-endian `u64` |
+| `vectors.bin` | Raw f32 vectors (row-major, `n_vectors × dims` floats) |
+| `norms_sq.bin` | Raw f32 squared L2 norms (`n_vectors` floats) |
+| `payloads.bin` | Concatenated bincode-serialized payload bytes |
+| `offsets.bin` | Byte offsets (`u64`) into `payloads.bin`, one per vector |
+
+### Loading
+
+Pass the directory and your chosen backend to `RingDb::load()`:
+
+```rust
+use ringdb::{RingDb, BackendPreference, RingQuery};
+use std::path::Path;
+
+let db = RingDb::<()>::load(
+    Path::new("/tmp/mydb"),
+    BackendPreference::Cpu,
+).unwrap();
+
+// db is a fully usable SealedRingDb — query immediately
+let result = db.query(&RingQuery {
+    query: &[1.0f32, 0.0, 0.0, 0.0],
+    d: 1.0,
+    lambda: 0.1,
+}).unwrap();
+```
+
+`load()` validates the file sizes against the stored metadata and returns
+`RingDbError::Corrupt` if anything is inconsistent.
+
+### With a typed payload
+
+```rust
+use ringdb::{RingDb, RingDbConfig, BackendPreference, RingQuery};
+use serde::{Serialize, Deserialize};
+use std::path::Path;
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Document { title: String }
+
+// --- save ---
+let mut db: RingDb<Document> = RingDb::new(
+    RingDbConfig::new(4).with_persist_dir("/tmp/docs")
+).unwrap();
+db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], Document { title: "Hello".into() }).unwrap();
+let _sealed = db.build().unwrap();
+
+// --- load in a new process ---
+let db = RingDb::<Document>::load(Path::new("/tmp/docs"), BackendPreference::Cpu).unwrap();
+let result = db.query(&RingQuery { query: &[1.0f32, 0.0, 0.0, 0.0], d: 1.0, lambda: 0.5 }).unwrap();
+let docs = db.fetch_payloads(&result.ids).unwrap();
+```
 
 The payload type `T` must implement `serde::Serialize + serde::DeserializeOwned`.
 Use `T = ()` when no payload is needed — the file is never written in that case.
@@ -297,7 +399,16 @@ Use `T = ()` when no payload is needed — the file is never written in that cas
 │  └──────────┬──────────┘   └──────────┬───────────┘  │
 │             │  build()                │              │
 └─────────────┼─────────────────────────┼──────────────┘
+              │                         │
+              │  (if persist_dir set)   │
               ▼                         ▼
+        ┌─────────────────────────────────────┐
+        │  Disk  (/persist_dir/)              │
+        │  meta.bin  vectors.bin  norms_sq.bin│
+        │  payloads.bin  offsets.bin          │
+        └──────────────┬──────────────────────┘
+                       │  RingDb::load(dir, backend)
+                       ▼
 ┌──────────────────────────────────────────────────────┐
 │  SealedRingDb<T>  (immutable, Send + Sync)           │
 │                                                      │
@@ -320,7 +431,7 @@ The `RingComputeBackend` trait separates the upload step from the query step,
 reflecting the intended usage: upload once, then run many queries against
 resident data without re-uploading.
 
-```rust
+```
 pub trait RingComputeBackend: Send + Sync {
     fn name(&self) -> &'static str;
     fn upload_f32_dataset(&mut self, dims: usize, vectors: Vec<f32>, norms_sq: Vec<f32>) -> Result<()>;
@@ -454,7 +565,7 @@ Results:
 - [ ] CUDA backend for datacenter workloads
 - [ ] AVX-512 hand-rolled kernel (skipping Rayon for very small datasets)
 - [ ] Approximate ring search (LSH / quantisation) for datasets > 1 B vectors
-- [ ] Persistent on-disk format (memory-mapped, no load time)
+- [x] Persistent on-disk format (`build()` writes, `RingDb::load()` rehydrates)
 - [ ] Python bindings (PyO3)
 
 ---

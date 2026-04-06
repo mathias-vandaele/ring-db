@@ -7,17 +7,17 @@
 //!
 //! ## Quick start
 //!
-/// ```
-/// use ringdb::{RingDb, RingDbConfig, RingQuery};
-///
-/// let mut db = RingDb::new(RingDbConfig::new(4)).unwrap();
-/// db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], ()).unwrap();
-/// db.add_vector(&[0.0, 5.0, 0.0, 0.0], ()).unwrap();
-///
-/// let db = db.build().unwrap();
-/// let result = db.query(&RingQuery { query: &[0.0f32; 4], d: 1.0, lambda: 0.1 }).unwrap();
-/// // result.ids contains IDs of all vectors at distance ≈ 1.0 from origin
-/// ```
+//! ```
+//! use ringdb::{RingDb, RingDbConfig, RingQuery};
+//!
+//! let mut db = RingDb::new(RingDbConfig::new(4)).unwrap();
+//! db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], ()).unwrap();
+//! db.add_vector(&[0.0, 5.0, 0.0, 0.0], ()).unwrap();
+//!
+//! let db = db.build().unwrap();
+//! let result = db.query(&RingQuery { query: &[0.0f32; 4], d: 1.0, lambda: 0.1 }).unwrap();
+//! // result.ids contains IDs of all vectors at distance ≈ 1.0 from origin
+//! ```
 mod backend;
 mod config;
 mod engine;

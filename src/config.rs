@@ -51,6 +51,7 @@ impl RingDbConfig {
     ///
     /// let config = RingDbConfig::new(128).with_persist_dir("/var/data/mydb");
     /// ```
+    #[must_use]
     pub fn with_persist_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.persist_dir = Some(dir.into());
         self
@@ -69,6 +70,7 @@ impl RingDbConfig {
     ///
     /// let config = RingDbConfig::new(128).with_backend_preference(BackendPreference::Cpu);
     /// ```
+    #[must_use]
     pub fn with_backend_preference(mut self, preference: BackendPreference) -> Self {
         self.backend_preference = preference;
         self

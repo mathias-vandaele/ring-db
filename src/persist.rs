@@ -18,6 +18,47 @@ use std::path::Path;
 
 use crate::error::{Result, RingDbError};
 
+// ── Private generic helpers ───────────────────────────────────────────────────
+
+/// Write a slice of `Copy` values as raw little-endian bytes.
+///
+/// `to_le` converts one value to its `N`-byte little-endian representation.
+fn write_le_file<T: Copy, const N: usize>(
+    path: &Path,
+    data: &[T],
+    to_le: fn(T) -> [u8; N],
+) -> Result<()> {
+    let mut w = BufWriter::with_capacity(1 << 20, File::create(path)?);
+    for &x in data {
+        w.write_all(&to_le(x))?;
+    }
+    Ok(())
+}
+
+/// Read a file of raw little-endian values into a `Vec<T>`.
+///
+/// Returns `RingDbError::Corrupt` if the file length is not a multiple of `N`.
+fn read_le_file<T, const N: usize>(
+    path: &Path,
+    from_le: fn([u8; N]) -> T,
+) -> Result<Vec<T>> {
+    let bytes = std::fs::read(path)?;
+    if bytes.len() % N != 0 {
+        return Err(RingDbError::Corrupt(format!(
+            "file '{}' has {} bytes (not a multiple of {})",
+            path.display(),
+            bytes.len(),
+            N,
+        )));
+    }
+    // chunks_exact(N) guarantees each chunk is exactly N bytes, so
+    // try_into().unwrap() is always safe here.
+    Ok(bytes
+        .chunks_exact(N)
+        .map(|b| from_le(b.try_into().unwrap()))
+        .collect())
+}
+
 // ── Meta ─────────────────────────────────────────────────────────────────────
 
 /// Write `(dims, n_vectors)` as two little-endian u64 values.
@@ -38,6 +79,7 @@ pub fn read_meta(path: &Path) -> Result<(usize, usize)> {
             bytes.len()
         )));
     }
+    // Both slices are exactly 8 bytes after the length check above.
     let dims = u64::from_le_bytes(bytes[0..8].try_into().unwrap()) as usize;
     let n_vectors = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
     Ok((dims, n_vectors))
@@ -47,56 +89,24 @@ pub fn read_meta(path: &Path) -> Result<(usize, usize)> {
 
 /// Write a `&[f32]` slice as raw little-endian bytes.
 pub fn write_f32_file(path: &Path, data: &[f32]) -> Result<()> {
-    // Use a large BufWriter so we make a small number of write syscalls even
-    // for datasets with millions of vectors.
-    let mut w = BufWriter::with_capacity(1 << 20, File::create(path)?);
-    for &x in data {
-        w.write_all(&x.to_le_bytes())?;
-    }
-    Ok(())
+    write_le_file(path, data, f32::to_le_bytes)
 }
 
 /// Read a file of raw little-endian f32 values into a `Vec<f32>`.
 pub fn read_f32_file(path: &Path) -> Result<Vec<f32>> {
-    let bytes = std::fs::read(path)?;
-    if bytes.len() % 4 != 0 {
-        return Err(RingDbError::Corrupt(format!(
-            "f32 file '{}' has {} bytes (not a multiple of 4)",
-            path.display(),
-            bytes.len()
-        )));
-    }
-    Ok(bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-        .collect())
+    read_le_file(path, f32::from_le_bytes)
 }
 
 // ── u64 offsets ──────────────────────────────────────────────────────────────
 
 /// Write a `&[u64]` slice as raw little-endian bytes.
 pub fn write_u64_file(path: &Path, data: &[u64]) -> Result<()> {
-    let mut w = BufWriter::with_capacity(1 << 20, File::create(path)?);
-    for &x in data {
-        w.write_all(&x.to_le_bytes())?;
-    }
-    Ok(())
+    write_le_file(path, data, u64::to_le_bytes)
 }
 
 /// Read a file of raw little-endian u64 values into a `Vec<u64>`.
 pub fn read_u64_file(path: &Path) -> Result<Vec<u64>> {
-    let bytes = std::fs::read(path)?;
-    if bytes.len() % 8 != 0 {
-        return Err(RingDbError::Corrupt(format!(
-            "u64 file '{}' has {} bytes (not a multiple of 8)",
-            path.display(),
-            bytes.len()
-        )));
-    }
-    Ok(bytes
-        .chunks_exact(8)
-        .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
-        .collect())
+    read_le_file(path, u64::from_le_bytes)
 }
 
 // ── File move ────────────────────────────────────────────────────────────────
