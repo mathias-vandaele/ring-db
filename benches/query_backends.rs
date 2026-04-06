@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::{Rng, SeedableRng};
 use ringdb::{RingDb, RingDbConfig, RingQuery};
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ fn bench_cpu_f32(c: &mut Criterion) {
                     d,
                     lambda,
                 })
-                    .unwrap()
+                .unwrap()
             });
         });
     }
@@ -77,7 +77,13 @@ fn bench_payload_fetch(c: &mut Criterion) {
             for x in buf.iter_mut() {
                 *x = rng.gen_range(-1.0f32..1.0);
             }
-            db.add_vector(&buf, HeavyPayload { label: label.clone() }).unwrap();
+            db.add_vector(
+                &buf,
+                HeavyPayload {
+                    label: label.clone(),
+                },
+            )
+            .unwrap();
         }
         let db = db.build().unwrap();
 
@@ -86,7 +92,13 @@ fn bench_payload_fetch(c: &mut Criterion) {
             (0..dims).map(|_| rng.gen_range(-1.0f32..1.0)).collect()
         };
 
-        let result = db.query(&RingQuery { query: &query, d, lambda }).unwrap();
+        let result = db
+            .query(&RingQuery {
+                query: &query,
+                d,
+                lambda,
+            })
+            .unwrap();
         let n_hits = result.ids.len();
 
         println!(

@@ -47,7 +47,8 @@ fn test_basic_hits() {
         let in_ring = d >= 4.5 && d <= 5.5;
         let found = ids.contains(&(i as u32));
         assert_eq!(
-            in_ring, found,
+            in_ring,
+            found,
             "vector {i} at dist={d:.3} should {} in ring [4.5, 5.5]",
             if in_ring { "be" } else { "NOT be" }
         );
@@ -186,7 +187,9 @@ fn test_higher_dims() {
     }
     let db = db.build().unwrap();
 
-    let query: Vec<f32> = (0..dims).map(|i| ((i as f32 * 2.7182818) % 2.0) - 1.0).collect();
+    let query: Vec<f32> = (0..dims)
+        .map(|i| ((i as f32 * 2.7182818) % 2.0) - 1.0)
+        .collect();
     let d = 5.0f32;
     let lambda = 0.5f32;
 
@@ -226,9 +229,30 @@ fn test_payload_roundtrip() {
     }
 
     let mut db: RingDb<Meta> = RingDb::new(RingDbConfig::new(2)).unwrap();
-    db.add_vector(&[1.0, 0.0], Meta { label: "dog".into(), score: 0.9 }).unwrap();
-    db.add_vector(&[0.0, 1.0], Meta { label: "cat".into(), score: 0.7 }).unwrap();
-    db.add_vector(&[5.0, 0.0], Meta { label: "bird".into(), score: 0.5 }).unwrap();
+    db.add_vector(
+        &[1.0, 0.0],
+        Meta {
+            label: "dog".into(),
+            score: 0.9,
+        },
+    )
+    .unwrap();
+    db.add_vector(
+        &[0.0, 1.0],
+        Meta {
+            label: "cat".into(),
+            score: 0.7,
+        },
+    )
+    .unwrap();
+    db.add_vector(
+        &[5.0, 0.0],
+        Meta {
+            label: "bird".into(),
+            score: 0.5,
+        },
+    )
+    .unwrap();
 
     let db = db.build().unwrap();
 

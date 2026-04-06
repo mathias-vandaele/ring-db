@@ -32,11 +32,5 @@ pub trait RingComputeBackend: Send + Sync {
     ///
     /// Returns IDs of all vectors with Euclidean distance to `query` in
     /// `[d - lambda, d + lambda]`.
-    fn ring_query_f32(
-        &self,
-        dims: usize,
-        query: &[f32],
-        d: f32,
-        lambda: f32,
-    ) -> Result<Vec<u32>>;
+    fn ring_query_f32(&self, dims: usize, query: &[f32], d: f32, lambda: f32) -> Result<Vec<u32>>;
 }

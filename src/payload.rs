@@ -14,11 +14,7 @@ use crate::error::{Result, RingDbError};
 fn new_temp_path() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "ringdb-payloads-{}-{}.bin",
-        std::process::id(),
-        id
-    ))
+    std::env::temp_dir().join(format!("ringdb-payloads-{}-{}.bin", std::process::id(), id))
 }
 
 /// Write-side of cold payload storage.
@@ -58,8 +54,8 @@ impl<T: Serialize> PayloadStoreBuilder<T> {
     /// `payload` is consumed and dropped immediately after serialization;
     /// only the transient `Vec<u8>` from `bincode` briefly exists in RAM.
     pub(crate) fn push(&mut self, payload: T) -> Result<()> {
-        let bytes = bincode::serialize(&payload)
-            .map_err(|e| RingDbError::Payload(e.to_string()))?;
+        let bytes =
+            bincode::serialize(&payload).map_err(|e| RingDbError::Payload(e.to_string()))?;
         self.writer
             .as_mut()
             .expect("push called after finish")

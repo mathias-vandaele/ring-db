@@ -18,7 +18,6 @@
 /// let result = db.query(&RingQuery { query: &[0.0f32; 4], d: 1.0, lambda: 0.1 }).unwrap();
 /// // result.ids contains IDs of all vectors at distance ≈ 1.0 from origin
 /// ```
-
 mod backend;
 mod config;
 mod engine;

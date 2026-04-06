@@ -91,6 +91,11 @@ fn main() {
     if ids.len() <= 20 {
         println!("  hit IDs      : {ids:?}");
     } else {
-        println!("  hit IDs      : [{}, {}, … {} total]", ids[0], ids[1], ids.len());
+        println!(
+            "  hit IDs      : [{}, {}, … {} total]",
+            ids[0],
+            ids[1],
+            ids.len()
+        );
     }
 }
