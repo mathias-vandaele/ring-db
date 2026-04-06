@@ -132,10 +132,9 @@ impl<T: Serialize + DeserializeOwned> RingDb<T> {
             write_f32_file(&dir.join("vectors.bin"), &self.vectors)?;
             write_f32_file(&dir.join("norms_sq.bin"), &self.norms_sq)?;
 
-            let payload_store = self.payload_builder.finish_persisted(
-                &dir.join("payloads.bin"),
-                &dir.join("offsets.bin"),
-            )?;
+            let payload_store = self
+                .payload_builder
+                .finish_persisted(&dir.join("payloads.bin"), &dir.join("offsets.bin"))?;
 
             self.backend
                 .upload_f32_dataset(dims, self.vectors, self.norms_sq)?;
@@ -189,7 +188,10 @@ impl<T: Serialize + DeserializeOwned> RingDb<T> {
     /// // --- load ---
     /// let loaded = RingDb::<()>::load(Path::new("/tmp/mydb"), BackendPreference::Cpu).unwrap();
     /// ```
-    pub fn load(dir: &Path, backend_preference: crate::config::BackendPreference) -> Result<SealedRingDb<T>> {
+    pub fn load(
+        dir: &Path,
+        backend_preference: crate::config::BackendPreference,
+    ) -> Result<SealedRingDb<T>> {
         let (dims, n_vectors) = read_meta(&dir.join("meta.bin"))?;
 
         let vectors = read_f32_file(&dir.join("vectors.bin"))?;

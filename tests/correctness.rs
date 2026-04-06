@@ -553,11 +553,7 @@ fn test_disk_equivalent_to_range_d_min_zero() {
 /// return the same results as the original.
 #[test]
 fn test_persist_and_load_unit_payload() {
-
-    let dir = std::env::temp_dir().join(format!(
-        "ringdb-test-persist-unit-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("ringdb-test-persist-unit-{}", std::process::id()));
     // Clean up any stale run.
     let _ = std::fs::remove_dir_all(&dir);
 
@@ -612,15 +608,12 @@ fn test_persist_and_load_struct_payload() {
         value: i32,
     }
 
-    let dir = std::env::temp_dir().join(format!(
-        "ringdb-test-persist-struct-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("ringdb-test-persist-struct-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
 
     // --- Build and persist ---
-    let mut db: RingDb<Meta> =
-        RingDb::new(RingDbConfig::new(2).with_persist_dir(&dir)).unwrap();
+    let mut db: RingDb<Meta> = RingDb::new(RingDbConfig::new(2).with_persist_dir(&dir)).unwrap();
     db.add_vector(
         &[1.0f32, 0.0],
         Meta {
@@ -677,4 +670,3 @@ fn test_persist_and_load_struct_payload() {
     let _ = std::fs::remove_dir_all(&dir);
     drop(result); // silence unused warning
 }
-

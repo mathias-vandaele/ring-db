@@ -231,4 +231,3 @@ impl<T> Drop for PayloadStore<T> {
         }
     }
 }
-
