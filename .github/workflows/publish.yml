@@ -46,14 +46,15 @@ jobs:
     steps:
       - name: Create GitHub release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           tag="${GITHUB_REF_NAME}"
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "$tag" --notes ""
+          if gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GH_REPO" --title "$tag" --notes ""
           else
-            gh release create "$tag" --title "$tag" --notes ""
+            gh release create "$tag" --repo "$GH_REPO" --title "$tag" --notes ""
           fi
 
 
