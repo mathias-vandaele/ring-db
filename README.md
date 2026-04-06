@@ -3,14 +3,20 @@
 A Rust library for **ring queries** in high-dimensional vector spaces.
 
 Instead of nearest-neighbour search, ring-db retrieves every vector whose
-Euclidean distance to a query falls inside a specified interval
-**[d − λ, d + λ]** — a hollow sphere (ring) rather than a ball.
+Euclidean distance to a query falls inside a specified interval.  
+Three query shapes are supported out of the box:
+
+| Query type | Interval | Typical use |
+|---|---|---|
+| **`RingQuery`** | [d − λ, d + λ] | Hollow shell at distance d |
+| **`RangeQuery`** | [d_min, d_max] | Arbitrary distance band |
+| **`DiskQuery`** | [0, d_max] | Full ball / nearest-within-radius |
 
 ```
-         ┌─────── λ ──────┐
- ─────── d ────────────────── query
-         └────────────────┘
-   vectors in this shell are returned
+  RingQuery          RangeQuery          DiskQuery
+  ┌──── λ ───┐       ┌──────────┐        ┌──────────────┐
+  d ─────────── q    d_min  d_max  q     0      d_max   q
+  └──────────┘
 ```
 
 ---
@@ -41,12 +47,20 @@ want to filter by it rather than rank by it. Nearest-neighbour returns a ranked
 list; a ring query returns a boolean membership set — every result satisfies the
 same geometric constraint.
 
+The three query types let you express the constraint directly:
+
+- **`RingQuery`** — symmetric band defined by a centre distance `d` and
+  half-width `λ`: interval `[d-λ, d+λ]`.
+- **`RangeQuery`** — arbitrary interval `[d_min, d_max]`, no conversion needed.
+- **`DiskQuery`** — full ball of radius `d_max`, equivalent to
+  `RangeQuery { d_min: 0, d_max }`.
+
 Internally, the library avoids computing square roots by working with squared
 L2 distances:
 
 ```
-lower_sq = max(0, d − λ)²
-upper_sq = (d + λ)²
+lower_sq = d_min²
+upper_sq = d_max²
 dist_sq  = ‖x‖² + ‖q‖² − 2·(x · q)
 ```
 
@@ -78,30 +92,57 @@ ring-db = { path = "." }         # or version once published
 serde = { version = "1", features = ["derive"] }
 ```
 
-### Minimal example — no payload
+### Ring query — hollow shell at distance d ± λ
 
 ```rust
 use ringdb::{RingDb, RingDbConfig, RingQuery};
 
-// 1. Build
 let mut db = RingDb::new(RingDbConfig::new(4)).unwrap();
 db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], ()).unwrap();
 db.add_vector(&[0.0, 5.0, 0.0, 0.0], ()).unwrap();
 db.add_vector(&[3.0, 4.0, 0.0, 0.0], ()).unwrap(); // dist = 5.0 from origin
 
-// 2. Seal
 let db = db.build().unwrap();
 
-// 3. Query — find all vectors at distance ≈ 5 from the origin (±0.5)
+// Find all vectors at distance ≈ 5 from the origin (band: [4.5, 5.5])
 let result = db.query(&RingQuery {
     query: &[0.0f32; 4],
     d: 5.0,
     lambda: 0.5,
 }).unwrap();
 
-println!("hits: {:?}", result.ids);          // [1, 2]
+println!("hits: {:?}", result.ids);           // [1, 2]
 println!("backend: {}", result.backend_used); // "cpu"
 println!("elapsed: {:?}", result.elapsed);
+```
+
+### Range query — explicit [d_min, d_max] band
+
+```rust
+use ringdb::{RingDb, RingDbConfig, RangeQuery};
+
+let db = /* build as above */;
+
+// Find all vectors between distance 3.0 and 6.0 from the query
+let result = db.query_range(&RangeQuery {
+    query: &[0.0f32; 4],
+    d_min: 3.0,
+    d_max: 6.0,
+}).unwrap();
+```
+
+### Disk query — everything within radius d_max
+
+```rust
+use ringdb::{RingDb, RingDbConfig, DiskQuery};
+
+let db = /* build as above */;
+
+// Find all vectors within distance 5.0 from the query (full ball)
+let result = db.query_disk(&DiskQuery {
+    query: &[0.0f32; 4],
+    d_max: 5.0,
+}).unwrap();
 ```
 
 ### With a typed payload
@@ -166,7 +207,9 @@ Vectors are assigned sequential IDs starting from **0** in insertion order.
 
 | Method | Description |
 |---|---|
-| `query(q)` | Execute a ring query; returns `QueryResult`. |
+| `query(q: &RingQuery)` | Ring query: interval `[d-λ, d+λ]`. |
+| `query_range(q: &RangeQuery)` | Range query: explicit `[d_min, d_max]`. |
+| `query_disk(q: &DiskQuery)` | Disk query: full ball `[0, d_max]`. |
 | `fetch_payload(id)` | Deserialize the payload for a single ID. |
 | `fetch_payloads(ids)` | Deserialize payloads for a slice of IDs, in order. |
 | `len()` / `is_empty()` / `dims()` | Introspection. |
@@ -177,8 +220,28 @@ Vectors are assigned sequential IDs starting from **0** in insertion order.
 RingQuery {
     query: &[f32],   // query vector, length == dims
     d: f32,          // centre of the ring (target distance)
-    lambda: f32,     // half-width of the ring
+    lambda: f32,     // half-width; interval = [max(0, d-λ), d+λ]
 }
+```
+
+### `RangeQuery<'a>`
+
+```rust
+RangeQuery {
+    query: &[f32],   // query vector, length == dims
+    d_min: f32,      // lower bound of the distance interval (inclusive, ≥ 0)
+    d_max: f32,      // upper bound of the distance interval (inclusive, ≥ d_min)
+}
+```
+
+### `DiskQuery<'a>`
+
+```rust
+DiskQuery {
+    query: &[f32],   // query vector, length == dims
+    d_max: f32,      // radius of the ball (inclusive, ≥ 0)
+}
+// Equivalent to RangeQuery { d_min: 0.0, d_max }
 ```
 
 ### `QueryResult`
@@ -261,9 +324,13 @@ resident data without re-uploading.
 pub trait RingComputeBackend: Send + Sync {
     fn name(&self) -> &'static str;
     fn upload_f32_dataset(&mut self, dims: usize, vectors: Vec<f32>, norms_sq: Vec<f32>) -> Result<()>;
-    fn ring_query_f32(&self, dims: usize, query: &[f32], d: f32, lambda: f32) -> Result<Vec<u32>>;
+    fn ring_query_f32(&self, dims: usize, query: &[f32], d_min: f32, d_max: f32) -> Result<Vec<u32>>;
 }
 ```
+
+All three public query methods (`query`, `query_range`, `query_disk`) translate
+their respective inputs into a `(d_min, d_max)` pair and delegate to this single
+backend method.
 
 New backends (WGPU, CUDA, AVX-512 hand-rolled) can be added without touching
 the public API.

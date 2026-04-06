@@ -6,7 +6,7 @@ use crate::backend::{CpuBackend, RingComputeBackend};
 use crate::config::RingDbConfig;
 use crate::error::Result;
 use crate::payload::{PayloadStore, PayloadStoreBuilder};
-use crate::query::{QueryResult, RingQuery};
+use crate::query::{DiskQuery, QueryResult, RangeQuery, RingQuery};
 
 /// Builder for a ring-query vector database.
 ///
@@ -158,6 +158,9 @@ pub struct SealedRingDb<T = ()> {
 
 impl<T: Serialize + DeserializeOwned> SealedRingDb<T> {
     /// Execute a ring query and return matching vector IDs.
+    ///
+    /// The ring `[d - lambda, d + lambda]` is converted to `[d_min, d_max]`
+    /// internally; negative lower bounds are clamped to 0.
     pub fn query(&self, q: &RingQuery<'_>) -> Result<QueryResult> {
         let dims = self.config.dims;
         if q.query.len() != dims {
@@ -167,8 +170,59 @@ impl<T: Serialize + DeserializeOwned> SealedRingDb<T> {
             });
         }
 
+        let d_min = (q.d - q.lambda).max(0.0);
+        let d_max = q.d + q.lambda;
+
         let t = Instant::now();
-        let ids = self.backend.ring_query_f32(dims, q.query, q.d, q.lambda)?;
+        let ids = self.backend.ring_query_f32(dims, q.query, d_min, d_max)?;
+        let elapsed = t.elapsed();
+
+        Ok(QueryResult {
+            ids,
+            backend_used: self.backend.name(),
+            elapsed,
+        })
+    }
+
+    /// Execute a range query and return matching vector IDs.
+    ///
+    /// Returns all vectors whose Euclidean distance to the query lies in
+    /// `[d_min, d_max]`.
+    pub fn query_range(&self, q: &RangeQuery<'_>) -> Result<QueryResult> {
+        let dims = self.config.dims;
+        if q.query.len() != dims {
+            return Err(crate::error::RingDbError::DimensionMismatch {
+                expected: dims,
+                got: q.query.len(),
+            });
+        }
+
+        let t = Instant::now();
+        let ids = self.backend.ring_query_f32(dims, q.query, q.d_min, q.d_max)?;
+        let elapsed = t.elapsed();
+
+        Ok(QueryResult {
+            ids,
+            backend_used: self.backend.name(),
+            elapsed,
+        })
+    }
+
+    /// Execute a disk query and return matching vector IDs.
+    ///
+    /// Returns all vectors within Euclidean distance `d_max` of the query
+    /// (i.e. the full ball of radius `d_max`, equivalent to `d_min = 0`).
+    pub fn query_disk(&self, q: &DiskQuery<'_>) -> Result<QueryResult> {
+        let dims = self.config.dims;
+        if q.query.len() != dims {
+            return Err(crate::error::RingDbError::DimensionMismatch {
+                expected: dims,
+                got: q.query.len(),
+            });
+        }
+
+        let t = Instant::now();
+        let ids = self.backend.ring_query_f32(dims, q.query, 0.0, q.d_max)?;
         let elapsed = t.elapsed();
 
         Ok(QueryResult {

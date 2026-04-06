@@ -99,7 +99,7 @@ impl RingComputeBackend for CpuBackend {
         Ok(())
     }
 
-    fn ring_query_f32(&self, dims: usize, query: &[f32], d: f32, lambda: f32) -> Result<Vec<u32>> {
+    fn ring_query_f32(&self, dims: usize, query: &[f32], d_min: f32, d_max: f32) -> Result<Vec<u32>> {
         if self.n_vectors == 0 {
             return Ok(Vec::new());
         }
@@ -111,9 +111,8 @@ impl RingComputeBackend for CpuBackend {
         }
 
         let norm_sq_q = norm_sq_f32(query);
-        let lower = (d - lambda).max(0.0);
-        let lower_sq = lower * lower;
-        let upper_sq = (d + lambda) * (d + lambda);
+        let lower_sq = d_min * d_min;
+        let upper_sq = d_max * d_max;
 
         let ids: Vec<u32> = self
             .vectors

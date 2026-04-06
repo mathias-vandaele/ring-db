@@ -28,4 +28,4 @@ mod query;
 pub use config::{BackendPreference, RingDbConfig};
 pub use engine::{RingDb, SealedRingDb};
 pub use error::RingDbError;
-pub use query::{QueryResult, RingQuery};
+pub use query::{DiskQuery, QueryResult, RangeQuery, RingQuery};
