@@ -2,7 +2,7 @@
 ///
 /// These tests use hand-crafted vectors at known distances from a query so
 /// the expected result sets are computed analytically, not by another code path.
-use ringdb::{DiskQuery, RangeQuery, RingDb, RingDbConfig, RingQuery};
+use ringdb::{BackendPreference, DiskQuery, RangeQuery, RingDb, RingDbConfig, RingQuery};
 
 fn cpu_db(dims: usize) -> RingDb {
     RingDb::new(RingDbConfig::new(dims)).unwrap()
@@ -546,3 +546,135 @@ fn test_disk_equivalent_to_range_d_min_zero() {
         "DiskQuery must equal RangeQuery(d_min=0)"
     );
 }
+
+// ── Persistence tests ─────────────────────────────────────────────────────────
+
+/// Build a database with `persist_dir`, drop it, reload it, and verify queries
+/// return the same results as the original.
+#[test]
+fn test_persist_and_load_unit_payload() {
+
+    let dir = std::env::temp_dir().join(format!(
+        "ringdb-test-persist-unit-{}",
+        std::process::id()
+    ));
+    // Clean up any stale run.
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // --- Build and persist ---
+    let mut db = RingDb::new(RingDbConfig::new(2).with_persist_dir(&dir)).unwrap();
+    db.add_vector(&[1.0f32, 0.0], ()).unwrap(); // distance 1.0 from origin
+    db.add_vector(&[0.0, 5.0], ()).unwrap(); // distance 5.0 from origin
+    db.add_vector(&[3.0, 4.0], ()).unwrap(); // distance 5.0 from origin
+    let original = db.build().unwrap();
+
+    let original_result = original
+        .query(&RingQuery {
+            query: &[0.0f32, 0.0],
+            d: 5.0,
+            lambda: 0.1,
+        })
+        .unwrap();
+    let mut original_ids = original_result.ids.clone();
+    original_ids.sort_unstable();
+
+    // Drop the original; files stay on disk.
+    drop(original);
+
+    // --- Load from disk ---
+    let loaded = RingDb::<()>::load(&dir, BackendPreference::Cpu).unwrap();
+    assert_eq!(loaded.len(), 3);
+    assert_eq!(loaded.dims(), 2);
+
+    let loaded_result = loaded
+        .query(&RingQuery {
+            query: &[0.0f32, 0.0],
+            d: 5.0,
+            lambda: 0.1,
+        })
+        .unwrap();
+    let mut loaded_ids = loaded_result.ids;
+    loaded_ids.sort_unstable();
+
+    assert_eq!(original_ids, loaded_ids, "loaded db must return same ids");
+
+    // Clean up.
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_persist_and_load_struct_payload() {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct Meta {
+        label: String,
+        value: i32,
+    }
+
+    let dir = std::env::temp_dir().join(format!(
+        "ringdb-test-persist-struct-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // --- Build and persist ---
+    let mut db: RingDb<Meta> =
+        RingDb::new(RingDbConfig::new(2).with_persist_dir(&dir)).unwrap();
+    db.add_vector(
+        &[1.0f32, 0.0],
+        Meta {
+            label: "dog".into(),
+            value: 1,
+        },
+    )
+    .unwrap();
+    db.add_vector(
+        &[0.0, 1.0],
+        Meta {
+            label: "cat".into(),
+            value: 2,
+        },
+    )
+    .unwrap();
+    let original = db.build().unwrap();
+    drop(original);
+
+    // --- Load from disk ---
+    let loaded = RingDb::<Meta>::load(&dir, BackendPreference::Cpu).unwrap();
+    assert_eq!(loaded.len(), 2);
+
+    let result = loaded
+        .query(&RingQuery {
+            query: &[1.0f32, 0.0],
+            d: 1.0,
+            lambda: 0.1,
+        })
+        .unwrap();
+
+    // Vector 0 ([1,0]) is exactly at distance 1.0 from [1,0] = 0; should NOT match.
+    // Vector 1 ([0,1]) is at distance sqrt(2) ≈ 1.414 from [1,0]; should NOT match.
+    // Adjust: query from origin, expecting [1,0] at d=1.
+    let result2 = loaded
+        .query(&RingQuery {
+            query: &[0.0f32, 0.0],
+            d: 1.0,
+            lambda: 0.1,
+        })
+        .unwrap();
+    assert_eq!(result2.ids.len(), 2); // both [1,0] and [0,1] are at distance 1 from origin
+
+    let payloads = loaded.fetch_payloads(&result2.ids).unwrap();
+    let labels: Vec<&str> = payloads.iter().map(|m| m.label.as_str()).collect();
+    assert!(labels.contains(&"dog"), "dog payload missing after load");
+    assert!(labels.contains(&"cat"), "cat payload missing after load");
+
+    // Verify values too.
+    for p in &payloads {
+        assert!(p.value == 1 || p.value == 2);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    drop(result); // silence unused warning
+}
+

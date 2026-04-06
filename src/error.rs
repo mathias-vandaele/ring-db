@@ -9,6 +9,9 @@ pub enum RingDbError {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("corrupt database: {0}")]
+    Corrupt(String),
 }
 
 pub type Result<T> = std::result::Result<T, RingDbError>;

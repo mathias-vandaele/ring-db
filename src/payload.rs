@@ -10,6 +10,7 @@ use std::{
 };
 
 use crate::error::{Result, RingDbError};
+use crate::persist::{move_file, write_u64_file};
 
 fn new_temp_path() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -90,12 +91,58 @@ impl<T: Serialize> PayloadStoreBuilder<T> {
         let store = PayloadStore {
             mmap,
             offsets: mem::take(&mut self.offsets),
-            temp_path: mem::take(&mut self.temp_path),
+            path: mem::take(&mut self.temp_path),
+            delete_on_drop: true,
             _marker: PhantomData,
         };
 
         Ok(store)
         // `self` is dropped here with an empty temp_path → Drop is a no-op.
+    }
+
+    /// Flush the staging data to persistent files, then mmap the payload file
+    /// read-only.
+    ///
+    /// - `payloads_path` — destination for the raw payload bytes (content of
+    ///   the current temp file).
+    /// - `offsets_path` — destination for the `offsets` table.
+    ///
+    /// The returned [`PayloadStore`] points at the persisted files and will
+    /// **not** delete them on drop.
+    pub(crate) fn finish_persisted(
+        mut self,
+        payloads_path: &std::path::Path,
+        offsets_path: &std::path::Path,
+    ) -> Result<PayloadStore<T>> {
+        // Flush and close the write handle.
+        if let Some(writer) = self.writer.take() {
+            writer.into_inner().map_err(|e| e.into_error())?;
+        }
+
+        // Persist the offset table.
+        write_u64_file(offsets_path, &self.offsets)?;
+
+        // Move the temp payload file to its final location.
+        move_file(&self.temp_path, payloads_path)?;
+        // Clear temp_path so Drop doesn't try to remove the now-moved file.
+        self.temp_path = PathBuf::new();
+
+        // Mmap the persisted payload file.
+        let mmap = if self.cursor == 0 {
+            None
+        } else {
+            let file = File::open(payloads_path)?;
+            // SAFETY: we just wrote this file and will not modify it again.
+            Some(unsafe { Mmap::map(&file) }?)
+        };
+
+        Ok(PayloadStore {
+            mmap,
+            offsets: mem::take(&mut self.offsets),
+            path: payloads_path.to_path_buf(),
+            delete_on_drop: false,
+            _marker: PhantomData,
+        })
     }
 }
 
@@ -117,11 +164,45 @@ impl<T> Drop for PayloadStoreBuilder<T> {
 pub struct PayloadStore<T> {
     mmap: Option<Mmap>,
     offsets: Vec<u64>,
-    temp_path: PathBuf,
+    /// File backing the mmap (temp or persisted).
+    path: PathBuf,
+    /// Whether to delete `path` on drop.  `true` for anonymous temp files,
+    /// `false` for user-managed persisted files.
+    delete_on_drop: bool,
     _marker: PhantomData<T>,
 }
 
 impl<T: DeserializeOwned> PayloadStore<T> {
+    /// Reconstruct a `PayloadStore` from files written by
+    /// [`PayloadStoreBuilder::finish_persisted`].
+    ///
+    /// The files are mmapped read-only; they are **not** deleted on drop.
+    pub(crate) fn load(
+        payloads_path: &std::path::Path,
+        offsets_path: &std::path::Path,
+    ) -> Result<Self> {
+        let offsets = crate::persist::read_u64_file(offsets_path)?;
+
+        // The last entry in `offsets` is the sentinel (total byte size).
+        let total_bytes = offsets.last().copied().unwrap_or(0);
+
+        let mmap = if total_bytes == 0 {
+            None
+        } else {
+            let file = File::open(payloads_path)?;
+            // SAFETY: this is a read-only file we do not modify.
+            Some(unsafe { Mmap::map(&file) }?)
+        };
+
+        Ok(PayloadStore {
+            mmap,
+            offsets,
+            path: payloads_path.to_path_buf(),
+            delete_on_drop: false,
+            _marker: PhantomData,
+        })
+    }
+
     /// Deserialize the payload for a single vector ID.
     pub fn fetch(&self, id: u32) -> Result<T> {
         let idx = id as usize;
@@ -145,6 +226,9 @@ impl<T> Drop for PayloadStore<T> {
         // Drop the mmap first to release all OS-level file handles.
         // This is required on Windows before the file can be deleted.
         drop(self.mmap.take());
-        let _ = std::fs::remove_file(&self.temp_path);
+        if self.delete_on_drop && !self.path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
+

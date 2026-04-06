@@ -1,11 +1,13 @@
+use std::path::Path;
 use std::time::Instant;
 
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::backend::{CpuBackend, RingComputeBackend};
 use crate::config::RingDbConfig;
-use crate::error::Result;
+use crate::error::{Result, RingDbError};
 use crate::payload::{PayloadStore, PayloadStoreBuilder};
+use crate::persist::{read_f32_file, read_meta, write_f32_file, write_meta};
 use crate::query::{DiskQuery, QueryResult, RangeQuery, RingQuery};
 
 /// Builder for a ring-query vector database.
@@ -106,15 +108,124 @@ impl<T: Serialize + DeserializeOwned> RingDb<T> {
     /// Vector data is moved into the backend (zero-cost for the CPU backend).
     /// Payloads are serialized and moved into a cold anonymous mmap — the
     /// staging `Vec<T>` is dropped immediately after.
+    ///
+    /// If [`RingDbConfig::persist_dir`] is set the following files are written
+    /// to that directory before sealing:
+    ///
+    /// | File | Content |
+    /// |------|---------|
+    /// | `meta.bin` | `dims` + `n_vectors` as little-endian u64 |
+    /// | `vectors.bin` | raw f32 vectors (row-major) |
+    /// | `norms_sq.bin` | raw f32 squared norms |
+    /// | `payloads.bin` | concatenated bincode payload bytes |
+    /// | `offsets.bin` | byte offsets (u64) into `payloads.bin` |
+    ///
+    /// The database can be reloaded later with [`RingDb::load()`].
     pub fn build(mut self) -> Result<SealedRingDb<T>> {
         let dims = self.config.dims;
         let n_vectors = self.n_vectors;
+
+        if let Some(dir) = self.config.persist_dir.clone() {
+            std::fs::create_dir_all(&dir)?;
+
+            write_meta(&dir.join("meta.bin"), dims, n_vectors)?;
+            write_f32_file(&dir.join("vectors.bin"), &self.vectors)?;
+            write_f32_file(&dir.join("norms_sq.bin"), &self.norms_sq)?;
+
+            let payload_store = self.payload_builder.finish_persisted(
+                &dir.join("payloads.bin"),
+                &dir.join("offsets.bin"),
+            )?;
+
+            self.backend
+                .upload_f32_dataset(dims, self.vectors, self.norms_sq)?;
+
+            return Ok(SealedRingDb {
+                config: self.config,
+                backend: self.backend,
+                n_vectors,
+                payload_store,
+            });
+        }
+
         self.backend
             .upload_f32_dataset(dims, self.vectors, self.norms_sq)?;
         let payload_store = self.payload_builder.finish()?;
         Ok(SealedRingDb {
             config: self.config,
             backend: self.backend,
+            n_vectors,
+            payload_store,
+        })
+    }
+
+    /// Reconstruct a [`SealedRingDb`] from a directory previously written by
+    /// [`RingDb::build()`] when [`RingDbConfig::persist_dir`] was set.
+    ///
+    /// Reads `meta.bin`, `vectors.bin`, `norms_sq.bin`, `payloads.bin`, and
+    /// `offsets.bin` from `dir`, re-uploads the vectors and norms to the
+    /// requested backend, and memory-maps the payload file.
+    ///
+    /// Pass [`BackendPreference::Cpu`] for the CPU backend (the only option
+    /// today; CUDA and others will be added later).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RingDbError::Corrupt`] if any file is missing, has an
+    /// unexpected size, or the dimension/count metadata is inconsistent.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use ringdb::{RingDb, RingDbConfig, SealedRingDb};
+    /// use ringdb::BackendPreference;
+    /// use std::path::Path;
+    ///
+    /// // --- save ---
+    /// let mut db = RingDb::<()>::new(RingDbConfig::new(4).with_persist_dir("/tmp/mydb")).unwrap();
+    /// db.add_vector(&[1.0, 0.0, 0.0, 0.0], ()).unwrap();
+    /// let _sealed = db.build().unwrap(); // writes files to /tmp/mydb
+    ///
+    /// // --- load ---
+    /// let loaded = RingDb::<()>::load(Path::new("/tmp/mydb"), BackendPreference::Cpu).unwrap();
+    /// ```
+    pub fn load(dir: &Path, backend_preference: crate::config::BackendPreference) -> Result<SealedRingDb<T>> {
+        let (dims, n_vectors) = read_meta(&dir.join("meta.bin"))?;
+
+        let vectors = read_f32_file(&dir.join("vectors.bin"))?;
+        let norms_sq = read_f32_file(&dir.join("norms_sq.bin"))?;
+
+        let expected_vec_len = n_vectors * dims;
+        if vectors.len() != expected_vec_len {
+            return Err(RingDbError::Corrupt(format!(
+                "vectors.bin has {} f32 values, expected {} (n_vectors={} × dims={})",
+                vectors.len(),
+                expected_vec_len,
+                n_vectors,
+                dims,
+            )));
+        }
+        if norms_sq.len() != n_vectors {
+            return Err(RingDbError::Corrupt(format!(
+                "norms_sq.bin has {} f32 values, expected {}",
+                norms_sq.len(),
+                n_vectors,
+            )));
+        }
+
+        let mut backend: Box<dyn RingComputeBackend> = match backend_preference {
+            crate::config::BackendPreference::Cpu => Box::new(CpuBackend::new()),
+        };
+        backend.upload_f32_dataset(dims, vectors, norms_sq)?;
+
+        let payload_store =
+            PayloadStore::load(&dir.join("payloads.bin"), &dir.join("offsets.bin"))?;
+
+        Ok(SealedRingDb {
+            config: RingDbConfig::new(dims)
+                .with_persist_dir(dir)
+                .with_backend_preference(backend_preference),
+            backend,
             n_vectors,
             payload_store,
         })
@@ -143,8 +254,8 @@ impl<T: Serialize + DeserializeOwned> RingDb<T> {
 
 /// Sealed (immutable) ring-query database.
 ///
-/// Obtained by calling [`RingDb::build()`]. Vectors can no longer be
-/// inserted — only queries and payload fetches are allowed.
+/// Obtained by calling [`RingDb::build()`] or [`RingDb::load()`]. Vectors can
+/// no longer be inserted — only queries and payload fetches are allowed.
 ///
 /// The hot side (vectors + norms) is owned by the compute backend.
 /// The cold side (payloads) lives in an anonymous mmap managed by

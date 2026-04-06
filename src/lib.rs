@@ -23,6 +23,7 @@ mod config;
 mod engine;
 mod error;
 mod payload;
+mod persist;
 mod query;
 
 pub use config::{BackendPreference, RingDbConfig};
