@@ -99,7 +99,13 @@ impl RingComputeBackend for CpuBackend {
         Ok(())
     }
 
-    fn ring_query_f32(&self, dims: usize, query: &[f32], d_min: f32, d_max: f32) -> Result<Vec<u32>> {
+    fn ring_query_f32(
+        &self,
+        dims: usize,
+        query: &[f32],
+        d_min: f32,
+        d_max: f32,
+    ) -> Result<Vec<u32>> {
         if self.n_vectors == 0 {
             return Ok(Vec::new());
         }

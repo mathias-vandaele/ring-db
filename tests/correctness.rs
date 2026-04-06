@@ -286,9 +286,9 @@ fn test_range_query_basic() {
     // Vectors at distances 1, 3, 5, 7 from origin.
     let mut db = cpu_db(2);
     db.add_vector(&[1.0f32, 0.0], ()).unwrap(); // dist 1 → miss (< 2.5)
-    db.add_vector(&[3.0, 0.0], ()).unwrap();    // dist 3 → hit
-    db.add_vector(&[5.0, 0.0], ()).unwrap();    // dist 5 → hit
-    db.add_vector(&[7.0, 0.0], ()).unwrap();    // dist 7 → miss (> 6)
+    db.add_vector(&[3.0, 0.0], ()).unwrap(); // dist 3 → hit
+    db.add_vector(&[5.0, 0.0], ()).unwrap(); // dist 5 → hit
+    db.add_vector(&[7.0, 0.0], ()).unwrap(); // dist 7 → miss (> 6)
     let db = db.build().unwrap();
 
     let result = db
@@ -309,8 +309,8 @@ fn test_range_query_inclusive_bounds() {
     // Vectors are placed exactly on the boundaries.
     let mut db = cpu_db(2);
     db.add_vector(&[3.0f32, 0.0], ()).unwrap(); // dist = 3.0 (on d_min)
-    db.add_vector(&[5.0, 0.0], ()).unwrap();    // dist = 5.0 (on d_max)
-    db.add_vector(&[4.0, 0.0], ()).unwrap();    // dist = 4.0 (inside)
+    db.add_vector(&[5.0, 0.0], ()).unwrap(); // dist = 5.0 (on d_max)
+    db.add_vector(&[4.0, 0.0], ()).unwrap(); // dist = 4.0 (inside)
     let db = db.build().unwrap();
 
     let result = db
@@ -323,7 +323,11 @@ fn test_range_query_inclusive_bounds() {
 
     let mut ids = result.ids;
     ids.sort_unstable();
-    assert_eq!(ids, vec![0, 1, 2], "boundary and interior vectors must all match");
+    assert_eq!(
+        ids,
+        vec![0, 1, 2],
+        "boundary and interior vectors must all match"
+    );
 }
 
 #[test]
@@ -331,7 +335,7 @@ fn test_range_query_empty_interval() {
     // d_min == d_max: only vectors at exactly that distance should match.
     let mut db = cpu_db(2);
     db.add_vector(&[3.0f32, 0.0], ()).unwrap(); // dist = 3
-    db.add_vector(&[4.0, 0.0], ()).unwrap();    // dist = 4
+    db.add_vector(&[4.0, 0.0], ()).unwrap(); // dist = 4
     let db = db.build().unwrap();
 
     let result = db
@@ -397,7 +401,10 @@ fn test_range_equivalent_to_ring() {
     let mut range_ids = range_result.ids;
     ring_ids.sort_unstable();
     range_ids.sort_unstable();
-    assert_eq!(ring_ids, range_ids, "RingQuery and RangeQuery must return identical IDs");
+    assert_eq!(
+        ring_ids, range_ids,
+        "RingQuery and RangeQuery must return identical IDs"
+    );
 }
 
 // ---- DiskQuery tests ----
@@ -407,9 +414,9 @@ fn test_disk_query_basic() {
     // Vectors at distances 1, 3, 5, 7 from origin.
     let mut db = cpu_db(2);
     db.add_vector(&[1.0f32, 0.0], ()).unwrap(); // dist 1 → hit
-    db.add_vector(&[3.0, 0.0], ()).unwrap();    // dist 3 → hit
-    db.add_vector(&[5.0, 0.0], ()).unwrap();    // dist 5 → hit (on boundary)
-    db.add_vector(&[7.0, 0.0], ()).unwrap();    // dist 7 → miss
+    db.add_vector(&[3.0, 0.0], ()).unwrap(); // dist 3 → hit
+    db.add_vector(&[5.0, 0.0], ()).unwrap(); // dist 5 → hit (on boundary)
+    db.add_vector(&[7.0, 0.0], ()).unwrap(); // dist 7 → miss
     let db = db.build().unwrap();
 
     let result = db
@@ -421,7 +428,11 @@ fn test_disk_query_basic() {
 
     let mut ids = result.ids;
     ids.sort_unstable();
-    assert_eq!(ids, vec![0, 1, 2], "all vectors within radius 5 should match");
+    assert_eq!(
+        ids,
+        vec![0, 1, 2],
+        "all vectors within radius 5 should match"
+    );
 }
 
 #[test]
@@ -429,7 +440,7 @@ fn test_disk_query_includes_origin() {
     // A vector at the origin is at distance 0 — must always be inside any disk.
     let mut db = cpu_db(2);
     db.add_vector(&[0.0f32, 0.0], ()).unwrap(); // dist 0
-    db.add_vector(&[10.0, 0.0], ()).unwrap();   // dist 10
+    db.add_vector(&[10.0, 0.0], ()).unwrap(); // dist 10
     let db = db.build().unwrap();
 
     let result = db
@@ -439,7 +450,10 @@ fn test_disk_query_includes_origin() {
         })
         .unwrap();
 
-    assert!(result.ids.contains(&0), "vector at origin must be inside disk");
+    assert!(
+        result.ids.contains(&0),
+        "vector at origin must be inside disk"
+    );
     assert!(!result.ids.contains(&1), "far vector must be outside disk");
 }
 
@@ -448,7 +462,7 @@ fn test_disk_query_d_max_zero() {
     // Disk of radius 0: only vectors coincident with the query match.
     let mut db = cpu_db(2);
     db.add_vector(&[0.0f32, 0.0], ()).unwrap(); // coincident  → hit
-    db.add_vector(&[1.0, 0.0], ()).unwrap();    // dist 1 → miss
+    db.add_vector(&[1.0, 0.0], ()).unwrap(); // dist 1 → miss
     let db = db.build().unwrap();
 
     let result = db
@@ -527,6 +541,8 @@ fn test_disk_equivalent_to_range_d_min_zero() {
     let mut range_ids = range_result.ids;
     disk_ids.sort_unstable();
     range_ids.sort_unstable();
-    assert_eq!(disk_ids, range_ids, "DiskQuery must equal RangeQuery(d_min=0)");
+    assert_eq!(
+        disk_ids, range_ids,
+        "DiskQuery must equal RangeQuery(d_min=0)"
+    );
 }
-

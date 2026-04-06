@@ -312,6 +312,8 @@ fn disk_equals_range_d_min_zero_random() {
     let mut range_ids = range_r.ids;
     disk_ids.sort_unstable();
     range_ids.sort_unstable();
-    assert_eq!(disk_ids, range_ids, "DiskQuery must equal RangeQuery(d_min=0)");
+    assert_eq!(
+        disk_ids, range_ids,
+        "DiskQuery must equal RangeQuery(d_min=0)"
+    );
 }
-

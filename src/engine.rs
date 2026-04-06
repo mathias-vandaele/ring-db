@@ -198,7 +198,9 @@ impl<T: Serialize + DeserializeOwned> SealedRingDb<T> {
         }
 
         let t = Instant::now();
-        let ids = self.backend.ring_query_f32(dims, q.query, q.d_min, q.d_max)?;
+        let ids = self
+            .backend
+            .ring_query_f32(dims, q.query, q.d_min, q.d_max)?;
         let elapsed = t.elapsed();
 
         Ok(QueryResult {
