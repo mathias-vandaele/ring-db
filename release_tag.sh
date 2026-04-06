@@ -33,7 +33,4 @@ git tag -a "v$VERSION" -m "Release v$VERSION"
 git push
 git push origin "v$VERSION"
 
-echo "Publishing crate..."
-cargo publish --locked
-
 echo "Release v$VERSION complete"
