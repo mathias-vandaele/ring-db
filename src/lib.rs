@@ -22,9 +22,9 @@ mod backend;
 mod config;
 mod engine;
 mod error;
+pub mod payload;
 mod persist;
 mod query;
-pub mod payload;
 
 pub use config::{BackendPreference, RingDbConfig};
 pub use engine::{RingDb, SealedRingDb};

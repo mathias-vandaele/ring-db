@@ -688,9 +688,33 @@ fn test_pod_payload_roundtrip() {
     }
 
     let mut db: RingDb<GeoPoint> = RingDb::new(RingDbConfig::new(2)).unwrap();
-    db.add_vector(&[1.0, 0.0], GeoPoint { lat: 48.8566, lon: 2.3522, altitude: 35.0 }).unwrap(); // ID 0
-    db.add_vector(&[0.0, 1.0], GeoPoint { lat: 51.5074, lon: -0.1278, altitude: 11.0 }).unwrap(); // ID 1
-    db.add_vector(&[5.0, 0.0], GeoPoint { lat: 0.0, lon: 0.0, altitude: 0.0 }).unwrap();          // ID 2 – far
+    db.add_vector(
+        &[1.0, 0.0],
+        GeoPoint {
+            lat: 48.8566,
+            lon: 2.3522,
+            altitude: 35.0,
+        },
+    )
+    .unwrap(); // ID 0
+    db.add_vector(
+        &[0.0, 1.0],
+        GeoPoint {
+            lat: 51.5074,
+            lon: -0.1278,
+            altitude: 11.0,
+        },
+    )
+    .unwrap(); // ID 1
+    db.add_vector(
+        &[5.0, 0.0],
+        GeoPoint {
+            lat: 0.0,
+            lon: 0.0,
+            altitude: 0.0,
+        },
+    )
+    .unwrap(); // ID 2 – far
 
     let db = db.build().unwrap();
 

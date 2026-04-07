@@ -1,5 +1,4 @@
 use memmap2::Mmap;
-use tempfile::TempPath;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fs::File,
@@ -7,11 +6,12 @@ use std::{
     marker::PhantomData,
     path::Path,
 };
+use tempfile::TempPath;
 
+use super::OwnedPayloadStore;
+use super::traits::{PayloadBuilderOps, open_mmap};
 use crate::error::{Result, RingDbError};
 use crate::persist::{move_file, read_u64_file, write_u64_file};
-use super::traits::{PayloadBuilderOps, open_mmap};
-use super::OwnedPayloadStore;
 
 // ─── SerdeStoreBuilder ────────────────────────────────────────────────────────
 
@@ -37,8 +37,8 @@ impl<T: Serialize> SerdeStoreBuilder<T> {
     }
 
     fn push_inner(&mut self, payload: T) -> Result<()> {
-        let bytes = bincode::serialize(&payload)
-            .map_err(|e| RingDbError::Payload(e.to_string()))?;
+        let bytes =
+            bincode::serialize(&payload).map_err(|e| RingDbError::Payload(e.to_string()))?;
         self.writer.write_all(&bytes)?;
         self.cursor += bytes.len() as u64;
         self.offsets.push(self.cursor);
@@ -46,7 +46,13 @@ impl<T: Serialize> SerdeStoreBuilder<T> {
     }
 
     fn finish_inner(self) -> Result<SerdeStore<T>> {
-        let Self { writer, temp_path, offsets, cursor, _marker } = self;
+        let Self {
+            writer,
+            temp_path,
+            offsets,
+            cursor,
+            _marker,
+        } = self;
         writer.into_inner().map_err(|e| e.into_error())?;
         let mmap = open_mmap(temp_path.as_ref(), cursor)?;
         Ok(SerdeStore {
@@ -61,7 +67,13 @@ impl<T: Serialize> SerdeStoreBuilder<T> {
         payloads_path: &Path,
         offsets_path: &Path,
     ) -> Result<SerdeStore<T>> {
-        let Self { writer, temp_path, offsets, cursor, _marker } = self;
+        let Self {
+            writer,
+            temp_path,
+            offsets,
+            cursor,
+            _marker,
+        } = self;
         writer.into_inner().map_err(|e| e.into_error())?;
         write_u64_file(offsets_path, &offsets)?;
         // move_file handles cross-filesystem moves with a copy fallback.

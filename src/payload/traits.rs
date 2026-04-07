@@ -3,7 +3,6 @@ use std::{fs::File, path::Path};
 
 use crate::error::Result;
 
-
 /// Mmap `path` read-only, or return `None` if `total_bytes == 0`.
 ///
 /// # Safety
@@ -28,7 +27,7 @@ pub(super) fn open_mmap(path: &Path, total_bytes: u64) -> Result<Option<Mmap>> {
 /// lets `RingDb::build()` return a `SealedRingDb<T>` without knowing the
 /// concrete storage type at the call site.
 #[doc(hidden)]
-pub trait PayloadBuilderOps<T>{
+pub trait PayloadBuilderOps<T> {
     type Store;
 
     fn push(&mut self, payload: T) -> Result<()>;

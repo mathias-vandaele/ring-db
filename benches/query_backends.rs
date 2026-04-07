@@ -20,7 +20,6 @@ struct StaticPayload {
     score: f32,
 }
 
-
 fn bench_cpu_f32(c: &mut Criterion) {
     let mut group = c.benchmark_group("cpu_f32");
     group.warm_up_time(Duration::from_secs(1));
@@ -147,13 +146,7 @@ fn bench_payload_fetch_static(c: &mut Criterion) {
             for x in buf.iter_mut() {
                 *x = rng.gen_range(-1.0f32..1.0);
             }
-            db.add_vector(
-                &buf,
-                StaticPayload {
-                    score,
-                },
-            )
-            .unwrap();
+            db.add_vector(&buf, StaticPayload { score }).unwrap();
         }
         let db = db.build().unwrap();
 
@@ -188,6 +181,10 @@ fn bench_payload_fetch_static(c: &mut Criterion) {
     group.finish();
 }
 
-
-criterion_group!(benches, bench_cpu_f32, bench_payload_fetch_dynamic, bench_payload_fetch_static);
+criterion_group!(
+    benches,
+    bench_cpu_f32,
+    bench_payload_fetch_dynamic,
+    bench_payload_fetch_static
+);
 criterion_main!(benches);

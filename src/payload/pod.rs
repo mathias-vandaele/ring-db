@@ -1,16 +1,16 @@
 use memmap2::Mmap;
-use tempfile::TempPath;
 use std::{
     fs::File,
     io::{BufWriter, Write},
     marker::PhantomData,
     path::Path,
 };
+use tempfile::TempPath;
 
-use crate::error::Result;
-use crate::persist::move_file;
 use super::traits::{PayloadBuilderOps, open_mmap};
 use super::{OwnedPayloadStore, RefPayloadStore};
+use crate::error::Result;
+use crate::persist::move_file;
 
 // ─── PodStoreBuilder ──────────────────────────────────────────────────────────
 //
@@ -46,7 +46,12 @@ impl<T: bytemuck::Pod> PodStoreBuilder<T> {
     }
 
     fn finish_inner(self) -> Result<PodStore<T>> {
-        let Self { writer, temp_path, n_pushed, _marker } = self;
+        let Self {
+            writer,
+            temp_path,
+            n_pushed,
+            _marker,
+        } = self;
         let total = (n_pushed * size_of::<T>()) as u64;
         writer.into_inner().map_err(|e| e.into_error())?;
         let mmap = open_mmap(temp_path.as_ref(), total)?;
@@ -57,7 +62,12 @@ impl<T: bytemuck::Pod> PodStoreBuilder<T> {
     }
 
     fn finish_persisted_inner(self, payloads_path: &Path) -> Result<PodStore<T>> {
-        let Self { writer, temp_path, n_pushed, _marker } = self;
+        let Self {
+            writer,
+            temp_path,
+            n_pushed,
+            _marker,
+        } = self;
         let total = (n_pushed * size_of::<T>()) as u64;
         writer.into_inner().map_err(|e| e.into_error())?;
         // move_file handles cross-filesystem moves with a copy fallback.
@@ -124,4 +134,3 @@ impl<T: bytemuck::Pod> RefPayloadStore<T> for PodStore<T> {
         )
     }
 }
-
