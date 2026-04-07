@@ -1,31 +1,8 @@
 use memmap2::Mmap;
-use std::{
-    fs::File,
-    io::BufWriter,
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{fs::File, path::Path};
 
 use crate::error::Result;
 
-// ─── Temp-file helpers ────────────────────────────────────────────────────────
-
-pub(super) fn new_temp_path() -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "ringdb-payloads-{}-{}.bin",
-        std::process::id(),
-        id
-    ))
-}
-
-pub(super) fn flush_writer(slot: &mut Option<BufWriter<File>>) -> Result<()> {
-    if let Some(writer) = slot.take() {
-        writer.into_inner().map_err(|e| e.into_error())?;
-    }
-    Ok(())
-}
 
 /// Mmap `path` read-only, or return `None` if `total_bytes == 0`.
 ///
@@ -51,7 +28,7 @@ pub(super) fn open_mmap(path: &Path, total_bytes: u64) -> Result<Option<Mmap>> {
 /// lets `RingDb::build()` return a `SealedRingDb<T>` without knowing the
 /// concrete storage type at the call site.
 #[doc(hidden)]
-pub trait PayloadBuilderOps<T>: Sized + 'static {
+pub trait PayloadBuilderOps<T>{
     type Store;
 
     fn push(&mut self, payload: T) -> Result<()>;

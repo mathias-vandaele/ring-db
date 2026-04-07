@@ -32,7 +32,7 @@ pub trait OwnedPayloadStore<T> {
 pub trait RefPayloadStore<T> {
     fn fetch_ref(&self, id: u32) -> &T;
 
-    fn fetch_many_ref<'a>(&'a self, ids: &[u32]) -> Vec<&'a T> {
+    fn fetch_many_ref(&self, ids: &[u32]) -> Vec<&T> {
         ids.iter().map(|&id| self.fetch_ref(id)).collect()
     }
 }
@@ -50,14 +50,14 @@ pub trait RefPayloadStore<T> {
 /// |----------|-----------|--------------|
 /// | Serde (default) | *(none)* | `T` (owned, bincode) |
 /// | Pod | `#[payload(storage = "pod")]` | `&T` (zero-copy mmap) |
-pub trait Payload: Sized + 'static {
+pub trait Payload: Sized {
     /// The read-only store produced by `Builder` and held inside
     /// [`SealedRingDb`](crate::SealedRingDb).
     type Store: OwnedPayloadStore<Self>;
 
     /// The write-side builder held inside [`RingDb`](crate::RingDb) during
     /// insertion. Consumed by `build()` to produce `Store`.
-    type Builder: PayloadBuilderOps<Self, Store = Self::Store> + 'static;
+    type Builder: PayloadBuilderOps<Self, Store = Self::Store>;
 
     /// Create a fresh builder (called by `RingDb::new`).
     fn make_builder() -> Result<Self::Builder>;
@@ -69,7 +69,7 @@ pub trait Payload: Sized + 'static {
 // ─── impl Payload for () ──────────────────────────────────────────────────────
 //
 // Allows `RingDb::new(config)` without specifying a payload type when none
-// is needed. Serde serialises `()` to 0 bytes, so the mmap stays empty.
+// is needed. Serde serializes `()` to 0 bytes, so the mmap stays empty.
 
 impl Payload for () {
     type Store = SerdeStore<()>;

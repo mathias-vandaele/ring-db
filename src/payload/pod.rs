@@ -1,15 +1,15 @@
 use memmap2::Mmap;
+use tempfile::TempPath;
 use std::{
     fs::File,
     io::{BufWriter, Write},
     marker::PhantomData,
-    mem,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use crate::error::Result;
 use crate::persist::move_file;
-use super::traits::{PayloadBuilderOps, flush_writer, new_temp_path, open_mmap};
+use super::traits::{PayloadBuilderOps, open_mmap};
 use super::{OwnedPayloadStore, RefPayloadStore};
 
 // ─── PodStoreBuilder ──────────────────────────────────────────────────────────
@@ -21,18 +21,18 @@ use super::{OwnedPayloadStore, RefPayloadStore};
 //   &T     = bytemuck::from_bytes(&mmap[offset..offset + size_of::<T>()])
 
 pub struct PodStoreBuilder<T> {
-    writer: Option<BufWriter<File>>,
-    temp_path: PathBuf,
+    writer: BufWriter<File>,
+    temp_path: TempPath,
     n_pushed: usize,
     _marker: PhantomData<T>,
 }
 
 impl<T: bytemuck::Pod> PodStoreBuilder<T> {
     pub fn new() -> Result<Self> {
-        let temp_path = new_temp_path();
-        let file = File::create(&temp_path)?;
+        let named = tempfile::NamedTempFile::new()?;
+        let (file, temp_path) = named.into_parts();
         Ok(Self {
-            writer: Some(BufWriter::new(file)),
+            writer: BufWriter::new(file),
             temp_path,
             n_pushed: 0,
             _marker: PhantomData,
@@ -40,40 +40,32 @@ impl<T: bytemuck::Pod> PodStoreBuilder<T> {
     }
 
     fn push_inner(&mut self, payload: T) -> Result<()> {
-        self.writer
-            .as_mut()
-            .expect("push called after finish")
-            .write_all(bytemuck::bytes_of(&payload))?;
+        self.writer.write_all(bytemuck::bytes_of(&payload))?;
         self.n_pushed += 1;
         Ok(())
     }
 
-    fn total_bytes(&self) -> u64 {
-        (self.n_pushed * std::mem::size_of::<T>()) as u64
-    }
-
-    fn finish_inner(mut self) -> Result<PodStore<T>> {
-        flush_writer(&mut self.writer)?;
-        let total = self.total_bytes();
-        let mmap = open_mmap(&self.temp_path, total)?;
+    fn finish_inner(self) -> Result<PodStore<T>> {
+        let Self { writer, temp_path, n_pushed, _marker } = self;
+        let total = (n_pushed * size_of::<T>()) as u64;
+        writer.into_inner().map_err(|e| e.into_error())?;
+        let mmap = open_mmap(temp_path.as_ref(), total)?;
         Ok(PodStore {
             mmap,
-            path: mem::take(&mut self.temp_path),
-            delete_on_drop: true,
             _marker: PhantomData,
         })
     }
 
-    fn finish_persisted_inner(mut self, payloads_path: &Path) -> Result<PodStore<T>> {
-        flush_writer(&mut self.writer)?;
-        move_file(&self.temp_path, payloads_path)?;
-        self.temp_path = PathBuf::new();
-        let total = self.total_bytes();
+    fn finish_persisted_inner(self, payloads_path: &Path) -> Result<PodStore<T>> {
+        let Self { writer, temp_path, n_pushed, _marker } = self;
+        let total = (n_pushed * size_of::<T>()) as u64;
+        writer.into_inner().map_err(|e| e.into_error())?;
+        // move_file handles cross-filesystem moves with a copy fallback.
+        // If it fails, temp_path is still alive and its Drop will clean up.
+        move_file(temp_path.as_ref(), payloads_path)?;
         let mmap = open_mmap(payloads_path, total)?;
         Ok(PodStore {
             mmap,
-            path: payloads_path.to_path_buf(),
-            delete_on_drop: false,
             _marker: PhantomData,
         })
     }
@@ -96,21 +88,11 @@ impl<T: bytemuck::Pod> PayloadBuilderOps<T> for PodStoreBuilder<T> {
     }
 }
 
-impl<T> Drop for PodStoreBuilder<T> {
-    fn drop(&mut self) {
-        drop(self.writer.take());
-        if !self.temp_path.as_os_str().is_empty() {
-            let _ = std::fs::remove_file(&self.temp_path);
-        }
-    }
-}
-
 // ─── PodStore ─────────────────────────────────────────────────────────────────
 
 pub struct PodStore<T> {
     mmap: Option<Mmap>,
-    path: PathBuf,
-    delete_on_drop: bool,
+    // Declared after `mmap` so it drops after the mmap is released.
     _marker: PhantomData<T>,
 }
 
@@ -120,8 +102,6 @@ impl<T: bytemuck::Pod> PodStore<T> {
         let mmap = open_mmap(payloads_path, total_bytes)?;
         Ok(PodStore {
             mmap,
-            path: payloads_path.to_path_buf(),
-            delete_on_drop: false,
             _marker: PhantomData,
         })
     }
@@ -145,11 +125,3 @@ impl<T: bytemuck::Pod> RefPayloadStore<T> for PodStore<T> {
     }
 }
 
-impl<T> Drop for PodStore<T> {
-    fn drop(&mut self) {
-        drop(self.mmap.take());
-        if self.delete_on_drop && !self.path.as_os_str().is_empty() {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
