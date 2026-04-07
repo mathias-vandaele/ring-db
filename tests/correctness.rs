@@ -2,7 +2,7 @@
 ///
 /// These tests use hand-crafted vectors at known distances from a query so
 /// the expected result sets are computed analytically, not by another code path.
-use ringdb::{BackendPreference, DiskQuery, RangeQuery, RingDb, RingDbConfig, RingQuery};
+use ringdb::{BackendPreference, DiskQuery, Payload, RangeQuery, RingDb, RingDbConfig, RingQuery};
 
 fn cpu_db(dims: usize) -> RingDb {
     RingDb::new(RingDbConfig::new(dims)).unwrap()
@@ -222,7 +222,7 @@ fn test_higher_dims() {
 fn test_payload_roundtrip() {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    #[derive(Serialize, Deserialize, Payload, Debug, PartialEq)]
     struct Meta {
         label: String,
         score: f64,
@@ -602,7 +602,7 @@ fn test_persist_and_load_unit_payload() {
 fn test_persist_and_load_struct_payload() {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    #[derive(Debug, Serialize, Deserialize, Payload, PartialEq)]
     struct Meta {
         label: String,
         value: i32,
@@ -669,4 +669,69 @@ fn test_persist_and_load_struct_payload() {
 
     let _ = std::fs::remove_dir_all(&dir);
     drop(result); // silence unused warning
+}
+
+// ── Pod payload tests ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_pod_payload_roundtrip() {
+    use bytemuck::{Pod, Zeroable};
+
+    /// A simple fixed-size payload — no heap allocation, no Serde needed.
+    #[derive(Copy, Clone, Pod, Zeroable, Payload, Debug, PartialEq)]
+    #[repr(C)]
+    #[payload(storage = "pod")]
+    struct GeoPoint {
+        lat: f32,
+        lon: f32,
+        altitude: f32,
+    }
+
+    let mut db: RingDb<GeoPoint> = RingDb::new(RingDbConfig::new(2)).unwrap();
+    db.add_vector(&[1.0, 0.0], GeoPoint { lat: 48.8566, lon: 2.3522, altitude: 35.0 }).unwrap(); // ID 0
+    db.add_vector(&[0.0, 1.0], GeoPoint { lat: 51.5074, lon: -0.1278, altitude: 11.0 }).unwrap(); // ID 1
+    db.add_vector(&[5.0, 0.0], GeoPoint { lat: 0.0, lon: 0.0, altitude: 0.0 }).unwrap();          // ID 2 – far
+
+    let db = db.build().unwrap();
+
+    let result = db
+        .query(&RingQuery {
+            query: &[0.0, 0.0],
+            d: 1.0,
+            lambda: 0.1,
+        })
+        .unwrap();
+
+    let mut ids = result.ids.clone();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![0, 1], "only vectors at distance ≈ 1 should match");
+
+    // fetch_pod returns &GeoPoint — zero-copy, O(1), no Result.
+    let p0 = db.fetch_pod(0);
+    assert!((p0.lat - 48.8566).abs() < 1e-3, "lat mismatch for ID 0");
+    assert!((p0.lon - 2.3522).abs() < 1e-3, "lon mismatch for ID 0");
+
+    let p1 = db.fetch_pod(1);
+    assert!((p1.lat - 51.5074).abs() < 1e-3, "lat mismatch for ID 1");
+
+    // fetch_pods returns Vec<&GeoPoint>.
+    let refs = db.fetch_pods(&result.ids);
+    assert_eq!(refs.len(), 2);
+}
+
+#[test]
+fn test_pod_storage_mismatch_error() {
+    use bytemuck::{Pod, Zeroable};
+
+    #[derive(Copy, Clone, Pod, Zeroable, Payload)]
+    #[repr(C)]
+    #[payload(storage = "pod")]
+    struct Tag(u64);
+
+    let mut pod_db: RingDb<Tag> = RingDb::new(RingDbConfig::new(2)).unwrap();
+    pod_db.add_vector(&[1.0, 0.0], Tag(42)).unwrap();
+    let pod_db = pod_db.build().unwrap();
+
+    // fetch_pod returns &Tag directly — no Result.
+    assert_eq!(pod_db.fetch_pod(0).0, 42);
 }

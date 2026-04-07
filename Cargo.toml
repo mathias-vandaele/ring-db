@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "derive"]
+resolver = "2"
+
 [package]
 name = "ring-db"
 version = "0.3.1"
@@ -27,8 +31,11 @@ thiserror = "2"
 memmap2 = "0.9"
 bincode = "1"
 serde = { version = "1", features = ["derive"] }
+bytemuck = { version = "1", features = ["derive"] }
+ring-db-derive = { path = "derive" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = { version = "0.8", features = ["small_rng"] }
 clap = { version = "4", features = ["derive"] }
+bytemuck = { version = "1", features = ["derive"] }

@@ -13,6 +13,9 @@ pub enum RingDbError {
 
     #[error("corrupt database: {0}")]
     Corrupt(String),
+
+    #[error("storage mode mismatch: use fetch_pod() for Pod storage and fetch_payload() for Serde storage")]
+    StorageMismatch,
 }
 
 pub type Result<T> = std::result::Result<T, RingDbError>;
