@@ -1,5 +1,5 @@
 /// Randomised sanity tests: no panics, valid IDs, no duplicates.
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use ringdb::{DiskQuery, RangeQuery, RingDb, RingDbConfig, RingQuery, SealedRingDb};
 
 fn random_db(dims: usize, n: usize, seed: u64) -> SealedRingDb {
@@ -8,7 +8,7 @@ fn random_db(dims: usize, n: usize, seed: u64) -> SealedRingDb {
     let mut buf = vec![0.0f32; dims];
     for _ in 0..n {
         for x in buf.iter_mut() {
-            *x = rng.gen_range(-1.0f32..1.0);
+            *x = rng.random_range(-1.0f32..1.0);
         }
         db.add_vector(&buf, ()).unwrap();
     }

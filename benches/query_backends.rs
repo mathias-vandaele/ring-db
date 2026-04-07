@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use ringdb::{Payload, RingDb, RingDbConfig, RingQuery};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -39,7 +39,7 @@ fn bench_cpu_f32(c: &mut Criterion) {
         let mut db = RingDb::new(RingDbConfig::new(dims)).unwrap();
         for _ in 0..N {
             for x in buf.iter_mut() {
-                *x = rng.gen_range(-1.0f32..1.0);
+                *x = rng.random_range(-1.0f32..1.0);
             }
             db.add_vector(&buf, ()).unwrap();
         }
@@ -47,7 +47,7 @@ fn bench_cpu_f32(c: &mut Criterion) {
 
         let query: Vec<f32> = {
             let mut rng = rand::rngs::SmallRng::seed_from_u64(SEED + 1);
-            (0..dims).map(|_| rng.gen_range(-1.0f32..1.0)).collect()
+            (0..dims).map(|_| rng.random_range(-1.0f32..1.0)).collect()
         };
 
         group.bench_with_input(BenchmarkId::from_parameter(dims), &dims, |b, _| {
@@ -83,7 +83,7 @@ fn bench_payload_fetch_dynamic(c: &mut Criterion) {
         let mut db: RingDb<DynamicPayload> = RingDb::new(RingDbConfig::new(dims)).unwrap();
         for _ in 0..N {
             for x in buf.iter_mut() {
-                *x = rng.gen_range(-1.0f32..1.0);
+                *x = rng.random_range(-1.0f32..1.0);
             }
             db.add_vector(
                 &buf,
@@ -97,7 +97,7 @@ fn bench_payload_fetch_dynamic(c: &mut Criterion) {
 
         let query: Vec<f32> = {
             let mut rng = rand::rngs::SmallRng::seed_from_u64(SEED + 1);
-            (0..dims).map(|_| rng.gen_range(-1.0f32..1.0)).collect()
+            (0..dims).map(|_| rng.random_range(-1.0f32..1.0)).collect()
         };
 
         let result = db
@@ -144,7 +144,7 @@ fn bench_payload_fetch_static(c: &mut Criterion) {
         let mut db: RingDb<StaticPayload> = RingDb::new(RingDbConfig::new(dims)).unwrap();
         for _ in 0..N {
             for x in buf.iter_mut() {
-                *x = rng.gen_range(-1.0f32..1.0);
+                *x = rng.random_range(-1.0f32..1.0);
             }
             db.add_vector(&buf, StaticPayload { score }).unwrap();
         }
@@ -152,7 +152,7 @@ fn bench_payload_fetch_static(c: &mut Criterion) {
 
         let query: Vec<f32> = {
             let mut rng = rand::rngs::SmallRng::seed_from_u64(SEED + 1);
-            (0..dims).map(|_| rng.gen_range(-1.0f32..1.0)).collect()
+            (0..dims).map(|_| rng.random_range(-1.0f32..1.0)).collect()
         };
 
         let result = db

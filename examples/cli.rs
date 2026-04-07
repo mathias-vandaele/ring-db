@@ -1,5 +1,5 @@
 use clap::Parser;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use ringdb::{QueryResult, RingDb, RingDbConfig, RingQuery};
 
 /// ringdb CLI — generate a random dataset and run a ring query.
@@ -49,14 +49,14 @@ fn main() {
     let mut buf = vec![0.0f32; cli.dims];
 
     for x in buf.iter_mut() {
-        *x = rng.gen_range(-1.0f32..1.0);
+        *x = rng.random_range(-1.0f32..1.0);
     }
     let query_vec = buf.clone();
     db.add_vector(&buf, ()).expect("failed to add vector");
 
     for _ in 1..cli.n {
         for x in buf.iter_mut() {
-            *x = rng.gen_range(-1.0f32..1.0);
+            *x = rng.random_range(-1.0f32..1.0);
         }
         db.add_vector(&buf, ()).expect("failed to add vector");
     }

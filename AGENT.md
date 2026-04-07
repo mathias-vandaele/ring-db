@@ -8,7 +8,6 @@
 
 Use cases: anomaly detection, content deduplication, recommendation diversity, spatial shells (GPS bands), audio fingerprinting, security threat detection.
 
-- Version: 0.4.0
 - Rust Edition: 2024
 - License: MIT OR Apache-2.0
 - Repo: https://github.com/mathias-vandaele/ring-db
