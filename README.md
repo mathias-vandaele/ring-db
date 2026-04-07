@@ -26,8 +26,8 @@ Three query shapes are supported out of the box:
 - [Why ring queries?](#why-ring-queries)
 - [Use cases](#use-cases)
 - [Quick start](#quick-start)
+- [Payload strategies](#payload-strategies)
 - [API overview](#api-overview)
-- [Payload storage](#payload-storage)
 - [Persistence](#persistence)
 - [Architecture](#architecture)
 - [Performance](#performance)
@@ -89,11 +89,13 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-ring-db = { path = "." }         # or version once published
-serde = { version = "1", features = ["derive"] }
+ring-db = "0.4"
+ring-db-derive = "0.4"
+serde = { version = "1", features = ["derive"] }   # only needed for serde payloads
+bytemuck = { version = "1", features = ["derive"] } # only needed for pod payloads
 ```
 
-### Ring query — hollow shell at distance d ± λ
+### Ring query — no payload
 
 ```rust
 use ringdb::{RingDb, RingDbConfig, RingQuery};
@@ -127,7 +129,6 @@ db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], ()).unwrap();
 db.add_vector(&[3.0, 4.0, 0.0, 0.0], ()).unwrap();
 let db = db.build().unwrap();
 
-// Find all vectors between distance 3.0 and 6.0 from the query
 let result = db.query_range(&RangeQuery {
     query: &[0.0f32; 4],
     d_min: 3.0,
@@ -145,20 +146,34 @@ db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], ()).unwrap();
 db.add_vector(&[3.0, 4.0, 0.0, 0.0], ()).unwrap();
 let db = db.build().unwrap();
 
-// Find all vectors within distance 5.0 from the query (full ball)
 let result = db.query_disk(&DiskQuery {
     query: &[0.0f32; 4],
     d_max: 5.0,
 }).unwrap();
 ```
 
-### With a typed payload
+---
+
+## Payload strategies
+
+ring-db ships a `#[derive(Payload)]` macro (from the `ring-db-derive` crate,
+re-exported as `ringdb::Payload`) that wires a user type to its storage
+strategy at compile time — **no runtime dispatch, no trait objects**.
+
+Two strategies are available:
+
+| Strategy | Attribute | Storage | Fetch | Best for |
+|---|---|---|---|---|
+| **Serde** (default) | *(none)* | bincode, variable-size | `T` (owned) | Strings, enums, dynamic data |
+| **Pod** | `#[payload(storage = "pod")]` | raw bytes, fixed-size | `&T` zero-copy | `repr(C)` structs, numeric records |
+
+### Serde payload — flexible, variable-size
 
 ```rust
-use ringdb::{RingDb, RingDbConfig, RingQuery};
+use ringdb::{RingDb, RingDbConfig, RingQuery, Payload};
 use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Payload)]
 struct Document {
     title: String,
     score: f64,
@@ -175,16 +190,63 @@ db.add_vector(&[0.0, 1.0, 0.0, 0.0], Document {
     score: 0.85,
 }).unwrap();
 
-let query = [0.8f32, 0.0, 0.0, 0.0];
 let db = db.build().unwrap();
-let result = db.query(&RingQuery { query: &query, d: 0.2, lambda: 0.1 }).unwrap();
+let result = db.query(&RingQuery { query: &[0.8f32, 0.0, 0.0, 0.0], d: 0.2, lambda: 0.1 }).unwrap();
 
-// Fetch payloads for matching IDs
+// Fetches payloads by deserializing from mmap via bincode
 let docs = db.fetch_payloads(&result.ids).unwrap();
 for doc in &docs {
     println!("{} (score={})", doc.title, doc.score);
 }
 ```
+
+### Pod payload — zero-copy, maximum retrieval performance
+
+Use `#[payload(storage = "pod")]` when your payload is a **fixed-size
+plain-old-data struct** (`#[repr(C)]` + `bytemuck::Pod`). The library stores
+raw bytes back-to-back — no offset table — and returns a `&T` pointing
+directly into the mmap. **No allocation, no deserialization, O(1).**
+
+> **When to choose Pod:** if retrieval latency is critical (real-time serving,
+> large hit counts, tight SLA), the Pod strategy is the right choice for
+> numeric or fixed-size payloads. On 30 M vectors with ~164 K hits, Pod
+> payload fetch is **~288× faster** than Serde (92 µs vs 26 ms — see
+> [Performance](#performance)).
+
+```rust
+use ringdb::{RingDb, RingDbConfig, RingQuery, Payload};
+use bytemuck::{Pod, Zeroable};
+
+#[derive(Copy, Clone, Pod, Zeroable, Payload)]
+#[repr(C)]
+#[payload(storage = "pod")]
+struct GeoPoint {
+    lat: f32,
+    lon: f32,
+    altitude: f32,
+}
+
+let mut db: RingDb<GeoPoint> = RingDb::new(RingDbConfig::new(3)).unwrap();
+
+db.add_vector(&[48.8566f32, 2.3522, 35.0], GeoPoint { lat: 48.8566, lon: 2.3522, altitude: 35.0 }).unwrap();
+db.add_vector(&[51.5074f32, -0.1278, 11.0], GeoPoint { lat: 51.5074, lon: -0.1278, altitude: 11.0 }).unwrap();
+
+let db = db.build().unwrap();
+let result = db.query(&RingQuery { query: &[48.0f32, 2.0, 30.0], d: 1.5, lambda: 0.5 }).unwrap();
+
+// Zero-copy: &GeoPoint points directly into the mmap — no heap allocation
+let points: Vec<&GeoPoint> = db.fetch_pods(&result.ids);
+for pt in points {
+    println!("lat={} lon={} alt={}", pt.lat, pt.lon, pt.altitude);
+}
+```
+
+**Requirements for Pod storage:**
+
+- The type must be `#[repr(C)]`
+- Must derive `bytemuck::Pod` + `bytemuck::Zeroable`
+- Must be `Copy` (fixed-size by definition)
+- No heap-allocated fields (no `String`, `Vec`, etc.)
 
 ---
 
@@ -228,9 +290,32 @@ Vectors are assigned sequential IDs starting from **0** in insertion order.
 | `query(q: &RingQuery)` | Ring query: interval `[d-λ, d+λ]`. |
 | `query_range(q: &RangeQuery)` | Range query: explicit `[d_min, d_max]`. |
 | `query_disk(q: &DiskQuery)` | Disk query: full ball `[0, d_max]`. |
-| `fetch_payload(id)` | Deserialize the payload for a single ID. |
+| `fetch_payload(id)` | Deserialize the payload for a single ID (serde or pod). |
 | `fetch_payloads(ids)` | Deserialize payloads for a slice of IDs, in order. |
+| `fetch_pod(id)` | **Pod only** — zero-copy `&T` reference into the mmap for a single ID. |
+| `fetch_pods(ids)` | **Pod only** — zero-copy `Vec<&T>` references for a slice of IDs. |
 | `len()` / `is_empty()` / `dims()` | Introspection. |
+
+> `fetch_pod` and `fetch_pods` are statically gated: they only exist when
+> `T::Store: RefPayloadStore<T>`, which is only true for
+> `#[payload(storage = "pod")]` types. Calling them on a Serde type is a
+> **compile error**, not a runtime panic.
+
+### `#[derive(Payload)]`
+
+```rust
+use ringdb::Payload;
+
+// Default: serde storage — requires Serialize + DeserializeOwned
+#[derive(serde::Serialize, serde::Deserialize, Payload)]
+struct MyDoc { title: String }
+
+// Pod storage — requires repr(C) + bytemuck::Pod
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, Payload)]
+#[repr(C)]
+#[payload(storage = "pod")]
+struct MyRecord { x: f32, y: f32 }
+```
 
 ### `RingQuery<'a>`
 
@@ -285,20 +370,29 @@ pub enum RingDbError {
 
 ---
 
-## Payload storage
+## Payload storage internals
 
-Payloads are designed to consume **zero hot memory** after the build phase:
+Payloads are designed to consume **zero hot memory** after the build phase.
+
+### Serde storage
 
 1. **Build phase** — each call to `add_vector` serializes the payload
    immediately (via `bincode`) and streams it to a temporary file.
-
 2. **Query phase** — after `build()`, the temp file is mmap-ed read-only.
    The OS can page payload bytes out under memory pressure. The only
    hot-path data is the offset table (8 bytes × number of vectors).
+3. **Fetch** — `fetch_payloads(ids)` slices the mmap by offset and runs
+   `bincode::deserialize` per hit. O(hits), not O(dataset).
 
-3. **Cleanup** — when **no** `persist_dir` is set, the temp file is deleted
-   automatically when `SealedRingDb` is dropped. When `persist_dir` is set,
-   the files are kept on disk and can be reloaded later with `RingDb::load()`.
+### Pod storage
+
+1. **Build phase** — each payload is written as raw bytes
+   (`bytemuck::bytes_of`) back-to-back, with no offset table.
+2. **Query phase** — the file is mmap-ed read-only. No offset table is kept
+   in memory at all: position = `id × size_of::<T>()`.
+3. **Fetch** — `fetch_pods(ids)` computes the offset arithmetically and calls
+   `bytemuck::from_bytes` — **zero copies, zero allocations**. The returned
+   `&T` borrows directly from the mmap.
 
 ---
 
@@ -332,12 +426,13 @@ let _sealed = db.build().unwrap(); // writes files to /tmp/mydb
 | `meta.bin` | `dims` + `n_vectors` as little-endian `u64` |
 | `vectors.bin` | Raw f32 vectors (row-major, `n_vectors × dims` floats) |
 | `norms_sq.bin` | Raw f32 squared L2 norms (`n_vectors` floats) |
-| `payloads.bin` | Concatenated bincode-serialized payload bytes |
-| `offsets.bin` | Byte offsets (`u64`) into `payloads.bin`, one per vector |
+| `payloads.bin` | Serde: bincode bytes · Pod: raw `T` bytes |
+| `offsets.bin` | Serde only: byte offsets (`u64`) into `payloads.bin` |
 
 ### Loading
 
-Pass the directory and your chosen backend to `RingDb::load()`:
+Pass the directory and your chosen backend to `RingDb::load()`. The correct
+storage variant (`SerdeStore` or `PodStore`) is selected automatically from `T`:
 
 ```rust
 use ringdb::{RingDb, BackendPreference, RingQuery};
@@ -348,7 +443,6 @@ let db = RingDb::<()>::load(
     BackendPreference::Cpu,
 ).unwrap();
 
-// db is a fully usable SealedRingDb — query immediately
 let result = db.query(&RingQuery {
     query: &[1.0f32, 0.0, 0.0, 0.0],
     d: 1.0,
@@ -359,45 +453,19 @@ let result = db.query(&RingQuery {
 `load()` validates the file sizes against the stored metadata and returns
 `RingDbError::Corrupt` if anything is inconsistent.
 
-### With a typed payload
-
-```rust
-use ringdb::{RingDb, RingDbConfig, BackendPreference, RingQuery};
-use serde::{Serialize, Deserialize};
-use std::path::Path;
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Document { title: String }
-
-// --- save ---
-let mut db: RingDb<Document> = RingDb::new(
-    RingDbConfig::new(4).with_persist_dir("/tmp/docs")
-).unwrap();
-db.add_vector(&[1.0f32, 0.0, 0.0, 0.0], Document { title: "Hello".into() }).unwrap();
-let _sealed = db.build().unwrap();
-
-// --- load in a new process ---
-let db = RingDb::<Document>::load(Path::new("/tmp/docs"), BackendPreference::Cpu).unwrap();
-let result = db.query(&RingQuery { query: &[1.0f32, 0.0, 0.0, 0.0], d: 1.0, lambda: 0.5 }).unwrap();
-let docs = db.fetch_payloads(&result.ids).unwrap();
-```
-
-The payload type `T` must implement `serde::Serialize + serde::DeserializeOwned`.
-Use `T = ()` when no payload is needed — the file is never written in that case.
-
 ---
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  RingDb<T>  (builder, mutable)                       │
+│  RingDb<T: Payload>  (builder, mutable)              │
 │                                                      │
 │  ┌─────────────────────┐   ┌──────────────────────┐  │
-│  │  vectors: Vec<f32>  │   │  PayloadStoreBuilder │  │
-│  │  norms_sq: Vec<f32> │   │  (BufWriter → tmpfile│  │
-│  └──────────┬──────────┘   └──────────┬───────────┘  │
-│             │  build()                │              │
+│  │  vectors: Vec<f32>  │   │  T::Builder          │  │
+│  │  norms_sq: Vec<f32> │   │  SerdeStoreBuilder   │  │
+│  └──────────┬──────────┘   │  or PodStoreBuilder  │  │
+│             │  build()     └──────────┬───────────┘  │
 └─────────────┼─────────────────────────┼──────────────┘
               │                         │
               │  (if persist_dir set)   │
@@ -405,7 +473,7 @@ Use `T = ()` when no payload is needed — the file is never written in that cas
         ┌─────────────────────────────────────┐
         │  Disk  (/persist_dir/)              │
         │  meta.bin  vectors.bin  norms_sq.bin│
-        │  payloads.bin  offsets.bin          │
+        │  payloads.bin  [offsets.bin]        │
         └──────────────┬──────────────────────┘
                        │  RingDb::load(dir, backend)
                        ▼
@@ -413,17 +481,36 @@ Use `T = ()` when no payload is needed — the file is never written in that cas
 │  SealedRingDb<T>  (immutable, Send + Sync)           │
 │                                                      │
 │  ┌─────────────────────────┐  ┌────────────────────┐ │
-│  │  RingComputeBackend     │  │  PayloadStore      │ │
-│  │  (trait object)         │  │  mmap + offsets    │ │
-│  │                         │  │  (cold, page-able) │ │
-│  │  ┌─────────────────┐    │  └────────────────────┘ │
-│  │  │  CpuBackend     │    │                         │
+│  │  RingComputeBackend     │  │  T::Store          │ │
+│  │  (trait object)         │  │  SerdeStore<T>     │ │
+│  │                         │  │  or PodStore<T>    │ │
+│  │  ┌─────────────────┐    │  │  (mmap, page-able) │ │
+│  │  │  CpuBackend     │    │  └────────────────────┘ │
 │  │  │  Rayon parallel │    │                         │
 │  │  │  4-acc dot prod │    │                         │
 │  │  └─────────────────┘    │                         │
 │  └─────────────────────────┘                         │
 └──────────────────────────────────────────────────────┘
 ```
+
+### Payload trait & derive
+
+The `Payload` trait ties a user type to its concrete storage strategy at
+compile time. It is implemented via `#[derive(Payload)]`:
+
+```rust
+pub trait Payload: Sized {
+    type Store: OwnedPayloadStore<Self>;
+    type Builder: PayloadBuilderOps<Self, Store = Self::Store>;
+
+    fn make_builder() -> Result<Self::Builder>;
+    fn load_store(dir: &Path) -> Result<Self::Store>;
+}
+```
+
+`RingDb<T>` holds `T::Builder` and `SealedRingDb<T>` holds `T::Store` as
+**concrete fields** — no `Box<dyn>`, no heap indirection on the payload path.
+The compiler resolves the entire storage path at monomorphization time.
 
 ### Backend trait
 
@@ -475,18 +562,29 @@ Measured with [Criterion](https://github.com/bheisler/criterion.rs).
 
 At 64 dims this is **~440 M vectors/second** scanned on a single machine.
 
-### Payload fetch (100-byte string payload, mmap)
+### Payload fetch — Serde vs Pod (100-byte string payload, ~164 K hits)
 
-Fetching all payloads for matching vectors after a query (ring=[6.529, 6.535],
-~164 K hits out of 30 M):
+Ring: `[6.529, 6.535]` · 164 298 hits out of 30 M vectors · 64 dimensions.
 
-| Dimensions | Hits | Fetch time |
-|---:|---:|---:|
-| 64 | ~164 K | **~24 ms** |
-| 128 | ~184 K | **~26 ms** |
+| Strategy | Fetch time | Notes |
+|---|---:|---|
+| **Serde** (`bincode`) | **~26.6 ms** | Variable-size, heap-allocates per hit |
+| **Pod** (zero-copy mmap) | **~92 µs** | Fixed-size, `&T` from mmap, no alloc |
 
-Both are O(hits), not O(dataset), because payloads are addressed by offset
-table and read directly from the mmap.
+**Pod is ~288× faster** for payload retrieval when the payload is a
+fixed-size `repr(C)` struct. Use `#[payload(storage = "pod")]` whenever
+maximum retrieval throughput is required.
+
+```
+payload_fetch_dynamic/100B_string_payload/64
+                        time:   [25.959 ms 26.630 ms 27.608 ms]
+
+payload_fetch_static/100B_string_payload/64
+                        time:   [92.162 µs 92.298 µs 92.443 µs]
+```
+
+Both are O(hits), not O(dataset), because payloads are addressed directly
+by position in the mmap.
 
 ---
 
@@ -566,6 +664,8 @@ Results:
 - [ ] AVX-512 hand-rolled kernel (skipping Rayon for very small datasets)
 - [ ] Approximate ring search (LSH / quantisation) for datasets > 1 B vectors
 - [x] Persistent on-disk format (`build()` writes, `RingDb::load()` rehydrates)
+- [x] `#[derive(Payload)]` macro — serde and pod storage strategies
+- [x] Zero-copy Pod payload fetch (`fetch_pod` / `fetch_pods`)
 - [ ] Python bindings (PyO3)
 
 ---

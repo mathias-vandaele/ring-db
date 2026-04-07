@@ -8,7 +8,7 @@
 
 Use cases: anomaly detection, content deduplication, recommendation diversity, spatial shells (GPS bands), audio fingerprinting, security threat detection.
 
-- Version: 0.2.0
+- Version: 0.4.0
 - Rust Edition: 2024
 - License: MIT OR Apache-2.0
 - Repo: https://github.com/mathias-vandaele/ring-db
@@ -20,15 +20,23 @@ Use cases: anomaly detection, content deduplication, recommendation diversity, s
 ```
 ring-db/
 ├── src/
-│   ├── lib.rs             # Public API root, re-exports
+│   ├── lib.rs             # Public API root, re-exports, #[doc(hidden)] __private
 │   ├── engine.rs          # RingDb (builder) and SealedRingDb (immutable DB)
 │   ├── query.rs           # RingQuery, RangeQuery, DiskQuery, QueryResult
 │   ├── config.rs          # RingDbConfig and BackendPreference
 │   ├── error.rs           # RingDbError enum and Result alias
-│   ├── payload.rs         # PayloadStoreBuilder + PayloadStore (mmap cold storage)
+│   ├── persist.rs         # read/write helpers for binary files
 │   └── backend/
 │       ├── mod.rs         # RingComputeBackend trait
 │       └── cpu.rs         # CpuBackend: brute-force, Rayon-parallel, SIMD-friendly
+│   └── payload/
+│       ├── mod.rs         # Payload trait, OwnedPayloadStore, RefPayloadStore
+│       ├── traits.rs      # PayloadBuilderOps trait + open_mmap helper
+│       ├── serde.rs       # SerdeStoreBuilder + SerdeStore (bincode, variable-size)
+│       └── pod.rs         # PodStoreBuilder + PodStore (raw bytes, zero-copy &T)
+├── derive/
+│   ├── Cargo.toml         # ring-db-derive proc-macro crate
+│   └── src/lib.rs         # #[derive(Payload)] — dispatches to serde or pod storage
 ├── examples/
 │   └── cli.rs             # Standalone CLI: random dataset + ring query demo
 ├── benches/
@@ -38,9 +46,9 @@ ring-db/
 │   └── random.rs          # Randomized sanity tests
 ├── .github/workflows/
 │   ├── rust.yml           # CI: build + test on push/PR to master
-│   └── publish.yml        # Publish to crates.io on v*.*.* tags
-├── release_tag.sh         # Release automation (bump, fmt, clippy, tag, push)
-└── Cargo.toml
+│   └── publish.yml        # Publish ring-db-derive then ring-db on v*.*.* tags
+├── release_tag.sh         # Release automation (bump both Cargo.tomls, fmt, clippy, tag, push)
+└── Cargo.toml             # Workspace root + ring-db package
 ```
 
 ---
@@ -51,15 +59,67 @@ ring-db/
 
 Two main public types:
 
-**`RingDb<T>`** — mutable builder (generic over payload type `T`, default `()`)
+**`RingDb<T: Payload>`** — mutable builder (generic over payload type `T`, default `()`)
 - Holds staging buffers: `vectors` (f32 flat row-major), `norms_sq` (precomputed)
-- Streams payloads to a temp file immediately (no RAM accumulation)
-- Methods: `new()`, `add_vector()`, `build()`, `len()`, `is_empty()`, `dims()`, `backend_name()`
+- Holds `payload_builder: T::Builder` as a **concrete field** (no Box<dyn>)
+- Methods: `new()`, `add_vector()`, `build()`, `load()`, `len()`, `is_empty()`, `dims()`, `backend_name()`
 
-**`SealedRingDb<T>`** — immutable, `Send + Sync`
-- Owns the backend's hot data (vectors + norms)
-- Owns the cold payload store (memory-mapped temp file)
+**`SealedRingDb<T: Payload>`** — immutable, `Send + Sync`
+- Owns the backend's hot data (vectors + norms) via `Box<dyn RingComputeBackend>`
+- Owns `payload_store: T::Store` as a **concrete field**
 - Methods: `query()`, `query_range()`, `query_disk()`, `fetch_payload()`, `fetch_payloads()`
+- Additional impl block (gated on `T::Store: RefPayloadStore<T>`): `fetch_pod()`, `fetch_pods()`
+
+### [src/payload/mod.rs](src/payload/mod.rs)
+
+**`Payload` trait** — the core abstraction tying a user type to its storage:
+
+```rust
+pub trait Payload: Sized {
+    type Store: OwnedPayloadStore<Self>;
+    type Builder: PayloadBuilderOps<Self, Store = Self::Store>;
+    fn make_builder() -> Result<Self::Builder>;
+    fn load_store(dir: &Path) -> Result<Self::Store>;
+}
+```
+
+**`OwnedPayloadStore<T>`** — implemented by both `SerdeStore<T>` and `PodStore<T>`:
+- `fetch_owned(id) -> T` — deserializes one payload (bincode for Serde; byte-copy for Pod)
+- `fetch_many_owned(ids) -> Vec<T>`
+
+**`RefPayloadStore<T>`** — implemented **only** by `PodStore<T>`:
+- `fetch_ref(id) -> &T` — zero-copy reference into the mmap
+- `fetch_many_ref(ids) -> Vec<&T>`
+
+`impl Payload for ()` is provided so `RingDb::new()` works without a payload type.
+
+### [src/payload/serde.rs](src/payload/serde.rs)
+
+Variable-size bincode storage.
+- **Build**: serializes each payload with bincode, streams to temp file, maintains `Vec<u64>` offset table
+- **Read**: mmaps the payload file; `fetch_owned` slices by offset and runs `bincode::deserialize`
+- Persist: writes `payloads.bin` + `offsets.bin`
+
+### [src/payload/pod.rs](src/payload/pod.rs)
+
+Zero-copy raw-bytes storage for `T: bytemuck::Pod`.
+- **Build**: writes `bytemuck::bytes_of(&payload)` back-to-back, **no offset table**
+- **Read**: `fetch_ref(id)` computes `offset = id * size_of::<T>()`, returns `bytemuck::from_bytes(&mmap[offset..offset+size])`
+- No heap allocation, no deserialization — just a pointer into the mmap
+- Persist: writes `payloads.bin` only (no `offsets.bin`)
+
+### [derive/src/lib.rs](derive/src/lib.rs)
+
+Proc-macro crate (`ring-db-derive`), re-exported as `ringdb::Payload`.
+
+`#[derive(Payload)]` generates a `Payload` impl. Storage strategy is selected by:
+```
+#[payload(storage = "serde")]  // default — SerdeStore/SerdeStoreBuilder
+#[payload(storage = "pod")]    // PodStore/PodStoreBuilder
+```
+
+Generated code references `::ringdb::__private::*`, which is a `#[doc(hidden)]`
+module re-exporting the concrete store types.
 
 ### [src/query.rs](src/query.rs)
 
@@ -85,25 +145,14 @@ The only available backend. Key optimizations:
 
 Distance formula: `dist_sq = norm_sq_i + norm_sq_q − 2·dot(row, query)`
 
-### [src/payload.rs](src/payload.rs)
-
-**`PayloadStoreBuilder<T>`** (write phase):
-- Creates `ringdb-payloads-{pid}-{counter}.bin` in `temp_dir()`
-- `push(payload)` serializes via bincode and streams to `BufWriter` immediately
-- Maintains `offsets: Vec<u64>` (8 bytes per vector, always hot)
-
-**`PayloadStore<T>`** (read phase):
-- Memory-maps the temp file read-only after build
-- Payloads paged by OS; only the offset table stays resident
-- Auto-cleanup on drop (closes mmap, deletes temp file)
-
 ### [src/error.rs](src/error.rs)
 
 ```rust
 pub enum RingDbError {
     DimensionMismatch { expected: usize, got: usize },
     Payload(String),        // bincode error
-    Io(std::io::Error),     // temp file I/O
+    Io(std::io::Error),     // temp file / persist I/O
+    Corrupt(String),        // inconsistent persist files on load
 }
 ```
 
@@ -114,10 +163,29 @@ pub enum RingDbError {
 | Decision | Reason |
 |----------|--------|
 | Two-phase builder (`RingDb` → `SealedRingDb`) | Upload once, query many; type-safe separation of concerns |
+| `Payload` trait + `#[derive(Payload)]` | User types select their storage at compile time; zero runtime dispatch on the payload path |
+| `T::Builder` / `T::Store` as concrete struct fields | Avoids `Box<dyn>` on every payload push/fetch; monomorphized by the compiler |
+| `fetch_pod` gated on `T::Store: RefPayloadStore<T>` | Misuse is a compile error, not a runtime panic |
+| Pod storage: no offset table | `size_of::<T>()` is a compile-time constant; position arithmetic beats an array lookup |
 | Cold payload storage via mmap | Scales beyond available RAM; OS pages out under pressure |
 | No `sqrt` in distance computation | Preserves ordering; avoids expensive operation; better SIMD scheduling |
 | Backend trait abstraction | Add GPU/CUDA/AVX-512 backends without changing public API |
 | Payload streamed to disk immediately | O(1) peak memory during build regardless of `T` size |
+
+---
+
+## Performance Summary
+
+30 M vectors · 64 dimensions · ring `[6.529, 6.535]` · ~164 K hits.
+
+| Operation | Time | Notes |
+|-----------|-----:|-------|
+| Ring query (CPU) | ~68 ms | ~440 M vectors/sec |
+| Payload fetch — Serde | ~26.6 ms | bincode deserialize per hit |
+| Payload fetch — Pod | ~92 µs | zero-copy `&T` from mmap |
+
+Pod fetch is **~288× faster** than Serde fetch for fixed-size payloads.
+Use `#[payload(storage = "pod")]` when retrieval latency is the bottleneck.
 
 ---
 
@@ -138,6 +206,7 @@ cargo test -- --nocapture
 # Benchmark (recommended with native CPU features)
 RUSTFLAGS="-C target-cpu=native" cargo bench
 cargo bench --bench query_backends cpu_f32
+cargo bench --bench query_backends payload_fetch
 
 # Example CLI
 cargo run --release --example cli -- --n 100000 --dims 64 --d 5.0 --lambda 0.2
@@ -146,8 +215,8 @@ cargo run --example cli -- --help
 # Docs
 cargo doc --open
 
-# Release (automated)
-./release_tag.sh <version>          # formats, clippy, bumps, tags, pushes
+# Release (automated — bumps both Cargo.tomls, tags, pushes)
+./release_tag.sh <version>
 ```
 
 ---
@@ -159,8 +228,10 @@ cargo doc --open
 | `rayon` | Data parallelism (work-stealing) |
 | `thiserror` | Error derive macro |
 | `memmap2` | Memory-mapped file I/O |
-| `bincode` | Binary serialization for payloads |
+| `bincode` | Binary serialization for Serde payloads |
 | `serde` | Serialization framework |
+| `bytemuck` | Pod cast for zero-copy payload storage |
+| `ring-db-derive` | `#[derive(Payload)]` proc-macro |
 | `criterion` (dev) | Statistical benchmarking |
 | `rand` (dev) | Deterministic random generation |
 | `clap` (dev) | CLI argument parsing (example only) |
@@ -175,15 +246,19 @@ add_vector(&[f32], T)
   → [dim check]
   → [compute norm_sq]
   → [extend vectors staging buffer]
-  → [serialize T → temp file]
+  → T::Builder::push(payload)
+      Serde: serialize T → bincode → append to temp file
+      Pod:   bytemuck::bytes_of(&payload) → append to temp file
 ```
 
 ### Build
 ```
 db.build()
   → backend.upload_f32_dataset(dims, vectors, norms_sq)
-  → payload_builder.finish() → mmap
-  → SealedRingDb { backend, payload_store }
+  → T::Builder::finish() → T::Store (mmap)
+      Serde: flush + mmap payloads.bin + offsets.bin
+      Pod:   flush + mmap payloads.bin (no offsets file)
+  → SealedRingDb { backend, payload_store: T::Store }
 ```
 
 ### Query
@@ -199,11 +274,19 @@ db.query(&RingQuery { query, d, lambda })
   → QueryResult { ids, backend_used, elapsed }
 ```
 
-### Payload fetch
+### Payload fetch — Serde
 ```
 db.fetch_payloads(&[id])
   → for each id: offsets[id]..offsets[id+1] → mmap slice → bincode::deserialize
   → Vec<T>
+```
+
+### Payload fetch — Pod
+```
+db.fetch_pods(&[id])
+  → for each id: offset = id * size_of::<T>()
+                 bytemuck::from_bytes(&mmap[offset..offset+size]) → &T
+  → Vec<&T>  (zero-copy, borrows mmap)
 ```
 
 ---
@@ -211,29 +294,51 @@ db.fetch_payloads(&[id])
 ## Public API Quick Reference
 
 ```rust
-use ringdb::{RingDb, RingDbConfig, RingQuery, RangeQuery, DiskQuery};
+use ringdb::{RingDb, RingDbConfig, RingQuery, RangeQuery, DiskQuery, Payload};
+
+// --- Payload type (serde strategy, default) ---
+#[derive(serde::Serialize, serde::Deserialize, Payload)]
+struct MyDoc { title: String }
+
+// --- Payload type (pod strategy — zero-copy fetch) ---
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, Payload)]
+#[repr(C)]
+#[payload(storage = "pod")]
+struct MyRecord { x: f32, y: f32 }
 
 // Build
-let mut db: RingDb<MyPayload> = RingDb::new(RingDbConfig::new(dims))?;
-db.add_vector(&vec_f32, my_payload)?;
-let db = db.build()?;  // → SealedRingDb<MyPayload>
+let mut db: RingDb<MyDoc> = RingDb::new(RingDbConfig::new(dims))?;
+db.add_vector(&vec_f32, my_doc)?;
+let db = db.build()?;  // → SealedRingDb<MyDoc>
 
 // Query variants
 let r = db.query(&RingQuery { query: &q, d: 5.0, lambda: 0.5 })?;
 let r = db.query_range(&RangeQuery { query: &q, d_min: 4.5, d_max: 5.5 })?;
 let r = db.query_disk(&DiskQuery { query: &q, d_max: 5.5 })?;
 
-// Fetch payloads
-let payloads: Vec<MyPayload> = db.fetch_payloads(&r.ids)?;
+// Fetch payloads (serde or pod — owned T)
+let payloads: Vec<MyDoc> = db.fetch_payloads(&r.ids)?;
+
+// Fetch payloads (pod only — zero-copy &T)
+let mut db2: RingDb<MyRecord> = RingDb::new(RingDbConfig::new(dims))?;
+// ... add_vector calls ...
+let db2 = db2.build()?;
+let refs: Vec<&MyRecord> = db2.fetch_pods(&r.ids);  // no allocation
 ```
 
-`T` defaults to `()` (no payload). Any `T: Serialize + DeserializeOwned` works.
+`T` defaults to `()` (no payload). Any `T: Payload` works; use `#[derive(Payload)]`.
 
 ---
 
 ## CI/CD
 
 - **Push/PR to `master`** → `rust.yml`: `cargo build` + `cargo test`
-- **Tag `v*.*.*`** → `publish.yml`: full test, dry-run publish, publish to crates.io, create GitHub release
+- **Tag `v*.*.*`** → `publish.yml`:
+  1. Full test suite
+  2. Dry-run + publish `ring-db-derive` (proc-macro, no deps on ring-db)
+  3. Sleep 30 s (crates.io indexing)
+  4. Dry-run + publish `ring-db`
+  5. Create GitHub release
 
 ---
+
