@@ -136,12 +136,7 @@ impl RingComputeBackend for CpuBackend {
             .collect())
     }
 
-    fn disk_query_f32(
-        &self,
-        dims: usize,
-        query: &[f32],
-        d_max: f32,
-    ) -> Result<Vec<QueryResponse>> {
+    fn disk_query_f32(&self, dims: usize, query: &[f32], d_max: f32) -> Result<Vec<QueryResponse>> {
         if self.n_vectors == 0 {
             return Ok(Vec::new());
         }

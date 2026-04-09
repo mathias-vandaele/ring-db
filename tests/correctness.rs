@@ -454,7 +454,10 @@ fn test_disk_query_includes_origin() {
         result.hits.iter().any(|h| h.id == 0),
         "vector at origin must be inside disk"
     );
-    assert!(!result.hits.iter().any(|h| h.id == 1), "far vector must be outside disk");
+    assert!(
+        !result.hits.iter().any(|h| h.id == 1),
+        "far vector must be outside disk"
+    );
 }
 
 #[test]

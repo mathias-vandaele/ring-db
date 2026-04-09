@@ -3,17 +3,20 @@ use std::time::Instant;
 
 use crate::BackendPreference;
 use crate::backend::{CpuBackend, RingComputeBackend};
-use crate::query::Hit;
 use crate::config::RingDbConfig;
 use crate::error::{Result, RingDbError};
 use crate::payload::{OwnedPayloadStore, Payload, PayloadBuilderOps, RefPayloadStore};
 use crate::persist::{read_f32_file, read_meta, write_f32_file, write_meta};
+use crate::query::Hit;
 use crate::query::{DiskQuery, QueryResult, RangeQuery, RingQuery};
 
 fn into_hits(responses: Vec<crate::backend::QueryResponse>) -> Vec<Hit> {
     responses
         .into_iter()
-        .map(|r| Hit { id: r.id, dist_sq: r.dist_sq })
+        .map(|r| Hit {
+            id: r.id,
+            dist_sq: r.dist_sq,
+        })
         .collect()
 }
 
@@ -290,7 +293,10 @@ impl<T: Payload> SealedRingDb<T> {
             });
         }
         let t = Instant::now();
-        let hits = into_hits(self.backend.ring_query_f32(dims, q.query, q.d_min, q.d_max)?);
+        let hits = into_hits(
+            self.backend
+                .ring_query_f32(dims, q.query, q.d_min, q.d_max)?,
+        );
         Ok(QueryResult {
             hits,
             backend_used: self.backend.name(),

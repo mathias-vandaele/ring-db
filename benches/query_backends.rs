@@ -92,7 +92,13 @@ fn bench_cpu_disk_f32(c: &mut Criterion) {
         };
 
         group.bench_with_input(BenchmarkId::from_parameter(dims), &dims, |b, _| {
-            b.iter(|| db.query_disk(&DiskQuery { query: &query, d_max }).unwrap());
+            b.iter(|| {
+                db.query_disk(&DiskQuery {
+                    query: &query,
+                    d_max,
+                })
+                .unwrap()
+            });
         });
     }
     group.finish();

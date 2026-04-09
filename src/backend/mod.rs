@@ -51,12 +51,7 @@ pub trait RingComputeBackend: Send + Sync {
     /// skips the lower-bound comparison so backends can squeeze out extra performance.
     ///
     /// The default implementation delegates to `ring_query_f32`.
-    fn disk_query_f32(
-        &self,
-        dims: usize,
-        query: &[f32],
-        d_max: f32,
-    ) -> Result<Vec<QueryResponse>> {
+    fn disk_query_f32(&self, dims: usize, query: &[f32], d_max: f32) -> Result<Vec<QueryResponse>> {
         self.ring_query_f32(dims, query, 0.0, d_max)
     }
 }

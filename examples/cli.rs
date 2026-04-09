@@ -89,7 +89,10 @@ fn main() {
     println!("  query time   : {elapsed:.2?}");
 
     if hits.len() <= 20 {
-        println!("  hit IDs      : {:?}", hits.iter().map(|h| h.id).collect::<Vec<_>>());
+        println!(
+            "  hit IDs      : {:?}",
+            hits.iter().map(|h| h.id).collect::<Vec<_>>()
+        );
     } else {
         println!(
             "  hit IDs      : [{}, {}, … {} total]",
