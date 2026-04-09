@@ -76,7 +76,7 @@ fn main() {
 
     print!("Running ring query … ");
     let QueryResult {
-        ids,
+        hits,
         backend_used,
         elapsed,
     } = db.query(&rq).expect("query failed");
@@ -85,17 +85,17 @@ fn main() {
     println!();
     println!("Results:");
     println!("  backend      : {backend_used}");
-    println!("  hits         : {}", ids.len());
+    println!("  hits         : {}", hits.len());
     println!("  query time   : {elapsed:.2?}");
 
-    if ids.len() <= 20 {
-        println!("  hit IDs      : {ids:?}");
+    if hits.len() <= 20 {
+        println!("  hit IDs      : {:?}", hits.iter().map(|h| h.id).collect::<Vec<_>>());
     } else {
         println!(
             "  hit IDs      : [{}, {}, … {} total]",
-            ids[0],
-            ids[1],
-            ids.len()
+            hits[0].id,
+            hits[1].id,
+            hits.len()
         );
     }
 }

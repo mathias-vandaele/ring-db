@@ -1,4 +1,4 @@
-use crate::backend::RingComputeBackend;
+use crate::backend::{QueryResponse, RingComputeBackend};
 use crate::error::{Result, RingDbError};
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
@@ -105,7 +105,7 @@ impl RingComputeBackend for CpuBackend {
         query: &[f32],
         d_min: f32,
         d_max: f32,
-    ) -> Result<Vec<u32>> {
+    ) -> Result<Vec<QueryResponse>> {
         if self.n_vectors == 0 {
             return Ok(Vec::new());
         }
@@ -120,7 +120,7 @@ impl RingComputeBackend for CpuBackend {
         let lower_sq = d_min * d_min;
         let upper_sq = d_max * d_max;
 
-        let ids: Vec<u32> = self
+        Ok(self
             .vectors
             .par_chunks_exact(dims)
             .zip(self.norms_sq.par_iter())
@@ -128,9 +128,46 @@ impl RingComputeBackend for CpuBackend {
             .filter_map(|(i, (row, &norm_sq_i))| {
                 let dot = dot_f32(row, query);
                 let dist_sq = norm_sq_i + norm_sq_q - 2.0 * dot;
-                (dist_sq >= lower_sq && dist_sq <= upper_sq).then_some(i as u32)
+                (dist_sq >= lower_sq && dist_sq <= upper_sq).then_some(QueryResponse {
+                    id: i as u32,
+                    dist_sq,
+                })
             })
-            .collect();
-        Ok(ids)
+            .collect())
+    }
+
+    fn disk_query_f32(
+        &self,
+        dims: usize,
+        query: &[f32],
+        d_max: f32,
+    ) -> Result<Vec<QueryResponse>> {
+        if self.n_vectors == 0 {
+            return Ok(Vec::new());
+        }
+        if query.len() != dims {
+            return Err(RingDbError::DimensionMismatch {
+                expected: dims,
+                got: query.len(),
+            });
+        }
+
+        let norm_sq_q = norm_sq_f32(query);
+        let upper_sq = d_max * d_max;
+
+        Ok(self
+            .vectors
+            .par_chunks_exact(dims)
+            .zip(self.norms_sq.par_iter())
+            .enumerate()
+            .filter_map(|(i, (row, &norm_sq_i))| {
+                let dot = dot_f32(row, query);
+                let dist_sq = norm_sq_i + norm_sq_q - 2.0 * dot;
+                (dist_sq <= upper_sq).then_some(QueryResponse {
+                    id: i as u32,
+                    dist_sq,
+                })
+            })
+            .collect())
     }
 }

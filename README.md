@@ -114,9 +114,15 @@ let result = db.query(&RingQuery {
     lambda: 0.5,
 }).unwrap();
 
-println!("hits: {:?}", result.ids);           // [1, 2]
+// result.hits is Vec<Hit> — each Hit carries the id and squared distance
+for hit in &result.hits {
+    println!("id={} dist={:.3}", hit.id, hit.dist_sq.sqrt());
+}
 println!("backend: {}", result.backend_used); // "cpu"
 println!("elapsed: {:?}", result.elapsed);
+
+// ids() is a convenience method when you need a plain Vec<u32>
+let ids = result.ids(); // → vec![1, 2]
 ```
 
 ### Range query — explicit [d_min, d_max] band
@@ -194,7 +200,7 @@ let db = db.build().unwrap();
 let result = db.query(&RingQuery { query: &[0.8f32, 0.0, 0.0, 0.0], d: 0.2, lambda: 0.1 }).unwrap();
 
 // Fetches payloads by deserializing from mmap via bincode
-let docs = db.fetch_payloads(&result.ids).unwrap();
+let docs = db.fetch_payloads(&result.ids()).unwrap();
 for doc in &docs {
     println!("{} (score={})", doc.title, doc.score);
 }
@@ -235,7 +241,7 @@ let db = db.build().unwrap();
 let result = db.query(&RingQuery { query: &[48.0f32, 2.0, 30.0], d: 1.5, lambda: 0.5 }).unwrap();
 
 // Zero-copy: &GeoPoint points directly into the mmap — no heap allocation
-let points: Vec<&GeoPoint> = db.fetch_pods(&result.ids);
+let points: Vec<&GeoPoint> = db.fetch_pods(&result.ids());
 for pt in points {
     println!("lat={} lon={} alt={}", pt.lat, pt.lon, pt.altitude);
 }
@@ -350,10 +356,24 @@ DiskQuery {
 ### `QueryResult`
 
 ```
-result.ids           // Vec<u32> — matching vector IDs
-result.backend_used  // &'static str — e.g. "cpu"
-result.elapsed       // Duration — wall-clock query time
+result.hits          // Vec<Hit>        — all matches with their squared distances
+result.backend_used  // &'static str    — e.g. "cpu"
+result.elapsed       // Duration        — wall-clock query time
+
+result.ids()         // Vec<u32>        — convenience: just the IDs, for fetch_payloads / fetch_pods
 ```
+
+### `Hit`
+
+Each entry in `result.hits` is a `Hit`:
+
+```
+hit.id               // u32  — insertion-order ID of the matching vector
+hit.dist_sq          // f32  — squared Euclidean distance to the query
+                     //        call hit.dist_sq.sqrt() for the actual distance
+```
+
+`Hit` is 8 bytes (two `f32`-sized fields, no padding) and derives `Debug`, `Clone`, `Copy`, and `PartialEq`.
 
 ### Error handling
 
@@ -522,16 +542,25 @@ resident data without re-uploading.
 pub trait RingComputeBackend: Send + Sync {
     fn name(&self) -> &'static str;
     fn upload_f32_dataset(&mut self, dims: usize, vectors: Vec<f32>, norms_sq: Vec<f32>) -> Result<()>;
-    fn ring_query_f32(&self, dims: usize, query: &[f32], d_min: f32, d_max: f32) -> Result<Vec<u32>>;
+
+    // Ring / range search: returns all vectors with dist in [d_min, d_max]
+    fn ring_query_f32(&self, dims: usize, query: &[f32], d_min: f32, d_max: f32) -> Result<Vec<Hit>>;
+
+    // Disk (ball) search: returns all vectors with dist in [0, d_max]
+    // Default impl delegates to ring_query_f32; backends can override for a
+    // tighter loop that skips the lower-bound comparison entirely.
+    fn disk_query_f32(&self, dims: usize, query: &[f32], d_max: f32) -> Result<Vec<Hit>> { … }
 }
 ```
 
-All three public query methods (`query`, `query_range`, `query_disk`) translate
-their respective inputs into a `(d_min, d_max)` pair and delegate to this single
-backend method.
+`query` and `query_range` delegate to `ring_query_f32`. `query_disk` delegates
+to `disk_query_f32`, which the CPU backend overrides to remove the
+`dist_sq >= lower_sq` branch — a small but measurable saving when scanning
+hundreds of millions of vectors.
 
 New backends (WGPU, CUDA, AVX-512 hand-rolled) can be added without touching
-the public API.
+the public API. Backends that do not override `disk_query_f32` get the
+ring-delegating default for free.
 
 ### CPU backend implementation
 
@@ -544,6 +573,9 @@ the public API.
   product is computed per vector at query time (no square root).
 - **Squared bounds** — both bounds are squared once before the loop to avoid
   `sqrt` entirely.
+- **Dedicated disk path** — `disk_query_f32` removes the lower-bound
+  comparison (`dist_sq >= 0`) that is always true, giving the branch predictor
+  one fewer condition to evaluate per vector.
 
 ---
 
@@ -596,6 +628,7 @@ cargo bench
 
 # Single group
 cargo bench --bench query_backends cpu_f32
+cargo bench --bench query_backends cpu_disk_f32
 cargo bench --bench query_backends payload_fetch
 
 # With native CPU optimisations (recommended)

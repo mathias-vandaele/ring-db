@@ -4,6 +4,11 @@ pub mod cpu;
 
 pub use cpu::CpuBackend;
 
+pub(crate) struct QueryResponse {
+    pub(crate) id: u32,
+    pub(crate) dist_sq: f32,
+}
+
 /// Trait implemented by all compute backends.
 ///
 /// The separation between upload and query reflects the core performance
@@ -30,13 +35,28 @@ pub trait RingComputeBackend: Send + Sync {
 
     /// Execute a float32 range search.
     ///
-    /// Returns IDs of all vectors with Euclidean distance to `query` in
-    /// `[d_min, d_max]`.
+    /// Returns all vectors with Euclidean distance to `query` in `[d_min, d_max]`,
+    /// along with their squared distances.
     fn ring_query_f32(
         &self,
         dims: usize,
         query: &[f32],
         d_min: f32,
         d_max: f32,
-    ) -> Result<Vec<u32>>;
+    ) -> Result<Vec<QueryResponse>>;
+
+    /// Execute a float32 disk (ball) search: all vectors within radius `d_max`.
+    ///
+    /// This is semantically equivalent to `ring_query_f32` with `d_min = 0`, but
+    /// skips the lower-bound comparison so backends can squeeze out extra performance.
+    ///
+    /// The default implementation delegates to `ring_query_f32`.
+    fn disk_query_f32(
+        &self,
+        dims: usize,
+        query: &[f32],
+        d_max: f32,
+    ) -> Result<Vec<QueryResponse>> {
+        self.ring_query_f32(dims, query, 0.0, d_max)
+    }
 }

@@ -1,5 +1,15 @@
 use std::time::Duration;
 
+/// A single match returned by a query.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hit {
+    /// Insertion-order ID of the matching vector (first inserted = 0).
+    pub id: u32,
+    /// Squared Euclidean distance to the query vector. Use `.sqrt()` to get
+    /// the actual distance.
+    pub dist_sq: f32,
+}
+
 /// A ring query: find all vectors whose Euclidean distance to `query`
 /// lies within `[d - lambda, d + lambda]`.
 ///
@@ -41,14 +51,21 @@ pub struct DiskQuery<'a> {
     pub d_max: f32,
 }
 
-/// Result of a ring query.
+/// Result of a ring/range/disk query.
 pub struct QueryResult {
-    /// IDs of all vectors whose distance to the query falls within
-    /// `[d - lambda, d + lambda]`. IDs correspond to insertion order
-    /// (first inserted vector has ID 0).
-    pub ids: Vec<u32>,
+    /// All matching vectors together with their squared distances.
+    pub hits: Vec<Hit>,
     /// Name of the backend that executed the query (e.g. `"cpu"`, `"wgpu"`, `"cuda"`).
     pub backend_used: &'static str,
     /// Wall-clock time for the query (excluding dataset upload).
     pub elapsed: Duration,
+}
+
+impl QueryResult {
+    /// Convenience: collect just the IDs from `hits` into a new `Vec<u32>`.
+    ///
+    /// Useful when calling `fetch_payloads` or `fetch_pods`, which take `&[u32]`.
+    pub fn ids(&self) -> Vec<u32> {
+        self.hits.iter().map(|h| h.id).collect()
+    }
 }

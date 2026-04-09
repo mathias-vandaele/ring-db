@@ -39,7 +39,7 @@ fn test_basic_hits() {
         })
         .unwrap();
 
-    let mut ids = result.ids;
+    let mut ids = result.ids();
     ids.sort_unstable();
 
     for (i, &pt) in pts.iter().enumerate() {
@@ -71,7 +71,7 @@ fn test_lambda_zero() {
         })
         .unwrap();
 
-    let mut ids = result.ids;
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert_eq!(ids, vec![0, 2], "only vectors at dist=3 should match");
 }
@@ -91,7 +91,7 @@ fn test_no_results() {
         })
         .unwrap();
 
-    assert!(result.ids.is_empty());
+    assert!(result.hits.is_empty());
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn test_all_results() {
         })
         .unwrap();
 
-    assert_eq!(result.ids.len(), 4);
+    assert_eq!(result.hits.len(), 4);
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn test_identical_vectors() {
         })
         .unwrap();
 
-    assert_eq!(result.ids.len(), 5);
+    assert_eq!(result.hits.len(), 5);
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn test_d_less_than_lambda() {
         })
         .unwrap();
 
-    let mut ids = result.ids;
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert!(ids.contains(&0), "vector at origin should match");
     assert!(!ids.contains(&1), "vector at dist=2 should not match");
@@ -202,7 +202,7 @@ fn test_higher_dims() {
         .unwrap();
 
     let norm_sq_q: f32 = query.iter().map(|x| x * x).sum();
-    for &id in &result.ids {
+    for id in result.hits.iter().map(|h| h.id) {
         let base = id as usize * dims;
         let row = &vecs[base..base + dims];
         let dot: f32 = row.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
@@ -264,11 +264,11 @@ fn test_payload_roundtrip() {
         })
         .unwrap();
 
-    let mut ids = result.ids.clone();
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert_eq!(ids, vec![0, 1]);
 
-    let payloads = db.fetch_payloads(&result.ids).unwrap();
+    let payloads = db.fetch_payloads(&result.ids()).unwrap();
     assert_eq!(payloads.len(), 2);
 
     let p0 = db.fetch_payload(0).unwrap();
@@ -299,7 +299,7 @@ fn test_range_query_basic() {
         })
         .unwrap();
 
-    let mut ids = result.ids;
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert_eq!(ids, vec![1, 2], "only vectors at dist 3 and 5 should match");
 }
@@ -321,7 +321,7 @@ fn test_range_query_inclusive_bounds() {
         })
         .unwrap();
 
-    let mut ids = result.ids;
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert_eq!(
         ids,
@@ -346,7 +346,7 @@ fn test_range_query_empty_interval() {
         })
         .unwrap();
 
-    let mut ids = result.ids;
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert_eq!(ids, vec![0], "only the vector at dist=3 should match");
 }
@@ -366,7 +366,7 @@ fn test_range_query_no_results() {
         })
         .unwrap();
 
-    assert!(result.ids.is_empty());
+    assert!(result.hits.is_empty());
 }
 
 /// A RangeQuery with d_min=(d-lambda).max(0) and d_max=d+lambda must return
@@ -397,8 +397,8 @@ fn test_range_equivalent_to_ring() {
         })
         .unwrap();
 
-    let mut ring_ids = ring_result.ids;
-    let mut range_ids = range_result.ids;
+    let mut ring_ids = ring_result.ids();
+    let mut range_ids = range_result.ids();
     ring_ids.sort_unstable();
     range_ids.sort_unstable();
     assert_eq!(
@@ -426,7 +426,7 @@ fn test_disk_query_basic() {
         })
         .unwrap();
 
-    let mut ids = result.ids;
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert_eq!(
         ids,
@@ -451,10 +451,10 @@ fn test_disk_query_includes_origin() {
         .unwrap();
 
     assert!(
-        result.ids.contains(&0),
+        result.hits.iter().any(|h| h.id == 0),
         "vector at origin must be inside disk"
     );
-    assert!(!result.ids.contains(&1), "far vector must be outside disk");
+    assert!(!result.hits.iter().any(|h| h.id == 1), "far vector must be outside disk");
 }
 
 #[test]
@@ -472,7 +472,7 @@ fn test_disk_query_d_max_zero() {
         })
         .unwrap();
 
-    let mut ids = result.ids;
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert_eq!(ids, vec![0]);
 }
@@ -503,14 +503,14 @@ fn test_disk_is_superset_of_ring() {
         .unwrap();
 
     // Every ring hit must also appear in the disk.
-    for &id in &ring_result.ids {
+    for id in ring_result.hits.iter().map(|h| h.id) {
         assert!(
-            disk_result.ids.contains(&id),
+            disk_result.hits.iter().any(|h| h.id == id),
             "ring hit ID {id} not found in disk result"
         );
     }
     // The disk must have at least as many hits.
-    assert!(disk_result.ids.len() >= ring_result.ids.len());
+    assert!(disk_result.hits.len() >= ring_result.hits.len());
 }
 
 /// DiskQuery with d_max equals RangeQuery with d_min=0 and same d_max.
@@ -537,8 +537,8 @@ fn test_disk_equivalent_to_range_d_min_zero() {
         })
         .unwrap();
 
-    let mut disk_ids = disk_result.ids;
-    let mut range_ids = range_result.ids;
+    let mut disk_ids = disk_result.ids();
+    let mut range_ids = range_result.ids();
     disk_ids.sort_unstable();
     range_ids.sort_unstable();
     assert_eq!(
@@ -571,7 +571,7 @@ fn test_persist_and_load_unit_payload() {
             lambda: 0.1,
         })
         .unwrap();
-    let mut original_ids = original_result.ids.clone();
+    let mut original_ids = original_result.ids();
     original_ids.sort_unstable();
 
     // Drop the original; files stay on disk.
@@ -589,7 +589,7 @@ fn test_persist_and_load_unit_payload() {
             lambda: 0.1,
         })
         .unwrap();
-    let mut loaded_ids = loaded_result.ids;
+    let mut loaded_ids = loaded_result.ids();
     loaded_ids.sort_unstable();
 
     assert_eq!(original_ids, loaded_ids, "loaded db must return same ids");
@@ -655,9 +655,9 @@ fn test_persist_and_load_struct_payload() {
             lambda: 0.1,
         })
         .unwrap();
-    assert_eq!(result2.ids.len(), 2); // both [1,0] and [0,1] are at distance 1 from origin
+    assert_eq!(result2.hits.len(), 2); // both [1,0] and [0,1] are at distance 1 from origin
 
-    let payloads = loaded.fetch_payloads(&result2.ids).unwrap();
+    let payloads = loaded.fetch_payloads(&result2.ids()).unwrap();
     let labels: Vec<&str> = payloads.iter().map(|m| m.label.as_str()).collect();
     assert!(labels.contains(&"dog"), "dog payload missing after load");
     assert!(labels.contains(&"cat"), "cat payload missing after load");
@@ -726,7 +726,7 @@ fn test_pod_payload_roundtrip() {
         })
         .unwrap();
 
-    let mut ids = result.ids.clone();
+    let mut ids = result.ids();
     ids.sort_unstable();
     assert_eq!(ids, vec![0, 1], "only vectors at distance ≈ 1 should match");
 
@@ -739,7 +739,7 @@ fn test_pod_payload_roundtrip() {
     assert!((p1.lat - 51.5074).abs() < 1e-3, "lat mismatch for ID 1");
 
     // fetch_pods returns Vec<&GeoPoint>.
-    let refs = db.fetch_pods(&result.ids);
+    let refs = db.fetch_pods(&result.ids());
     assert_eq!(refs.len(), 2);
 }
 

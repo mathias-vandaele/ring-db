@@ -16,7 +16,7 @@
 //!
 //! let db = db.build().unwrap();
 //! let result = db.query(&RingQuery { query: &[0.0f32; 4], d: 1.0, lambda: 0.1 }).unwrap();
-//! // result.ids contains IDs of all vectors at distance ≈ 1.0 from origin
+//! // result.hits contains all matching vectors with their squared distances
 //! ```
 mod backend;
 mod config;
@@ -30,7 +30,7 @@ pub use config::{BackendPreference, RingDbConfig};
 pub use engine::{RingDb, SealedRingDb};
 pub use error::RingDbError;
 pub use payload::{OwnedPayloadStore, Payload, RefPayloadStore};
-pub use query::{DiskQuery, QueryResult, RangeQuery, RingQuery};
+pub use query::{DiskQuery, Hit, QueryResult, RangeQuery, RingQuery};
 
 // Re-export the derive macro so users write `use ringdb::Payload` for both
 // the trait and the derive, mirroring the serde pattern.

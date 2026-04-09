@@ -39,7 +39,7 @@ fn random_no_panic_small() {
             lambda: 0.3,
         })
         .unwrap();
-    assert_valid_result(&r.ids, 50);
+    assert_valid_result(&r.ids(), 50);
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn random_no_panic_medium() {
             lambda: 0.5,
         })
         .unwrap();
-    assert_valid_result(&r.ids, 5_000);
+    assert_valid_result(&r.ids(), 5_000);
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn random_various_dims() {
                 lambda: 1.0,
             })
             .unwrap();
-        assert_valid_result(&r.ids, 200);
+        assert_valid_result(&r.ids(), 200);
     }
 }
 
@@ -100,7 +100,7 @@ fn empty_db_returns_empty() {
             lambda: 0.5,
         })
         .unwrap();
-    assert!(r.ids.is_empty());
+    assert!(r.hits.is_empty());
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn add_vectors_multiple_calls() {
         })
         .unwrap();
 
-    assert_eq!(r.ids.len(), 3);
+    assert_eq!(r.hits.len(), 3);
 }
 
 // ---- RangeQuery randomised tests ----
@@ -140,7 +140,7 @@ fn range_query_no_panic_small() {
             d_max: 2.0,
         })
         .unwrap();
-    assert_valid_result(&r.ids, 50);
+    assert_valid_result(&r.ids(), 50);
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn range_query_no_panic_medium() {
             d_max: 5.0,
         })
         .unwrap();
-    assert_valid_result(&r.ids, 5_000);
+    assert_valid_result(&r.ids(), 5_000);
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn range_query_various_dims() {
                 d_max: 4.0,
             })
             .unwrap();
-        assert_valid_result(&r.ids, 200);
+        assert_valid_result(&r.ids(), 200);
     }
 }
 
@@ -198,8 +198,8 @@ fn range_matches_ring_random() {
         })
         .unwrap();
 
-    let mut ring_ids = ring_r.ids;
-    let mut range_ids = range_r.ids;
+    let mut ring_ids = ring_r.ids();
+    let mut range_ids = range_r.ids();
     ring_ids.sort_unstable();
     range_ids.sort_unstable();
     assert_eq!(ring_ids, range_ids, "RingQuery and RangeQuery must agree");
@@ -217,7 +217,7 @@ fn disk_query_no_panic_small() {
             d_max: 3.0,
         })
         .unwrap();
-    assert_valid_result(&r.ids, 50);
+    assert_valid_result(&r.ids(), 50);
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn disk_query_no_panic_medium() {
             d_max: 6.0,
         })
         .unwrap();
-    assert_valid_result(&r.ids, 5_000);
+    assert_valid_result(&r.ids(), 5_000);
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn disk_query_various_dims() {
                 d_max: 5.0,
             })
             .unwrap();
-        assert_valid_result(&r.ids, 200);
+        assert_valid_result(&r.ids(), 200);
     }
 }
 
@@ -273,13 +273,14 @@ fn disk_is_superset_of_contained_range() {
         .unwrap();
 
     assert!(
-        disk_r.ids.len() >= range_r.ids.len(),
+        disk_r.hits.len() >= range_r.hits.len(),
         "disk (d_max=5) must have >= hits than range [2,5]"
     );
 
-    for &id in &range_r.ids {
+    let range_ids = range_r.ids();
+    for &id in &range_ids {
         assert!(
-            disk_r.ids.contains(&id),
+            disk_r.hits.iter().any(|h| h.id == id),
             "range hit {id} not found in disk result"
         );
     }
@@ -308,8 +309,8 @@ fn disk_equals_range_d_min_zero_random() {
         })
         .unwrap();
 
-    let mut disk_ids = disk_r.ids;
-    let mut range_ids = range_r.ids;
+    let mut disk_ids = disk_r.ids();
+    let mut range_ids = range_r.ids();
     disk_ids.sort_unstable();
     range_ids.sort_unstable();
     assert_eq!(

@@ -3,11 +3,19 @@ use std::time::Instant;
 
 use crate::BackendPreference;
 use crate::backend::{CpuBackend, RingComputeBackend};
+use crate::query::Hit;
 use crate::config::RingDbConfig;
 use crate::error::{Result, RingDbError};
 use crate::payload::{OwnedPayloadStore, Payload, PayloadBuilderOps, RefPayloadStore};
 use crate::persist::{read_f32_file, read_meta, write_f32_file, write_meta};
 use crate::query::{DiskQuery, QueryResult, RangeQuery, RingQuery};
+
+fn into_hits(responses: Vec<crate::backend::QueryResponse>) -> Vec<Hit> {
+    responses
+        .into_iter()
+        .map(|r| Hit { id: r.id, dist_sq: r.dist_sq })
+        .collect()
+}
 
 // ─── RingDb (builder) ────────────────────────────────────────────────────────
 
@@ -31,7 +39,7 @@ use crate::query::{DiskQuery, QueryResult, RangeQuery, RingQuery};
 ///
 /// let db = db.build().unwrap();
 /// let result = db.query(&RingQuery { query: &[1.0f32, 0.0, 0.0, 0.0], d: 1.0, lambda: 0.1 }).unwrap();
-/// println!("hits: {:?}", result.ids);
+/// println!("hits: {:?}", result.ids());
 /// ```
 pub struct RingDb<T: Payload = ()> {
     config: RingDbConfig,
@@ -71,7 +79,7 @@ impl<T: Payload> RingDb<T> {
     ///
     /// let db = db.build().unwrap();
     /// let result = db.query(&RingQuery { query: &[1.0f32, 0.0], d: 1.0, lambda: 0.1 }).unwrap();
-    /// let payloads = db.fetch_payloads(&result.ids).unwrap();
+    /// let payloads = db.fetch_payloads(&result.ids()).unwrap();
     /// ```
     pub fn new(config: RingDbConfig) -> Result<Self> {
         let backend = match config.backend_preference {
@@ -259,14 +267,14 @@ impl<T: Payload> SealedRingDb<T> {
             });
         }
         let t = Instant::now();
-        let ids = self.backend.ring_query_f32(
+        let hits = into_hits(self.backend.ring_query_f32(
             dims,
             q.query,
             (q.d - q.lambda).max(0.0),
             q.d + q.lambda,
-        )?;
+        )?);
         Ok(QueryResult {
-            ids,
+            hits,
             backend_used: self.backend.name(),
             elapsed: t.elapsed(),
         })
@@ -282,11 +290,9 @@ impl<T: Payload> SealedRingDb<T> {
             });
         }
         let t = Instant::now();
-        let ids = self
-            .backend
-            .ring_query_f32(dims, q.query, q.d_min, q.d_max)?;
+        let hits = into_hits(self.backend.ring_query_f32(dims, q.query, q.d_min, q.d_max)?);
         Ok(QueryResult {
-            ids,
+            hits,
             backend_used: self.backend.name(),
             elapsed: t.elapsed(),
         })
@@ -302,9 +308,9 @@ impl<T: Payload> SealedRingDb<T> {
             });
         }
         let t = Instant::now();
-        let ids = self.backend.ring_query_f32(dims, q.query, 0.0, q.d_max)?;
+        let hits = into_hits(self.backend.disk_query_f32(dims, q.query, q.d_max)?);
         Ok(QueryResult {
-            ids,
+            hits,
             backend_used: self.backend.name(),
             elapsed: t.elapsed(),
         })

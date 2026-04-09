@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::{RngExt, SeedableRng};
-use ringdb::{Payload, RingDb, RingDbConfig, RingQuery};
+use ringdb::{DiskQuery, Payload, RingDb, RingDbConfig, RingQuery};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -64,6 +64,40 @@ fn bench_cpu_f32(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_cpu_disk_f32(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cpu_disk_f32");
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    group.sample_size(20);
+
+    for &dims in &[64usize, 128usize] {
+        // Use the same expected distance as the ring bench so hit counts are comparable.
+        let d_max = ((2.0 * dims as f32) / 3.0).sqrt();
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(SEED);
+        let mut buf = vec![0.0f32; dims];
+
+        let mut db = RingDb::new(RingDbConfig::new(dims)).unwrap();
+        for _ in 0..N {
+            for x in buf.iter_mut() {
+                *x = rng.random_range(-1.0f32..1.0);
+            }
+            db.add_vector(&buf, ()).unwrap();
+        }
+        let db = db.build().unwrap();
+
+        let query: Vec<f32> = {
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(SEED + 1);
+            (0..dims).map(|_| rng.random_range(-1.0f32..1.0)).collect()
+        };
+
+        group.bench_with_input(BenchmarkId::from_parameter(dims), &dims, |b, _| {
+            b.iter(|| db.query_disk(&DiskQuery { query: &query, d_max }).unwrap());
+        });
+    }
+    group.finish();
+}
+
 fn bench_payload_fetch_dynamic(c: &mut Criterion) {
     let mut group = c.benchmark_group("payload_fetch_dynamic");
     group.warm_up_time(Duration::from_secs(1));
@@ -107,7 +141,8 @@ fn bench_payload_fetch_dynamic(c: &mut Criterion) {
                 lambda,
             })
             .unwrap();
-        let n_hits = result.ids.len();
+        let ids = result.ids();
+        let n_hits = ids.len();
 
         println!(
             "dims={dims} ring=[{:.3}, {:.3}] hits={n_hits} ({:.2}%)",
@@ -119,7 +154,7 @@ fn bench_payload_fetch_dynamic(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("100B_string_payload", dims),
             &n_hits,
-            |b, _| b.iter(|| db.fetch_payloads(&result.ids).unwrap()),
+            |b, _| b.iter(|| db.fetch_payloads(&ids).unwrap()),
         );
     }
 
@@ -162,7 +197,8 @@ fn bench_payload_fetch_static(c: &mut Criterion) {
                 lambda,
             })
             .unwrap();
-        let n_hits = result.ids.len();
+        let ids = result.ids();
+        let n_hits = ids.len();
 
         println!(
             "dims={dims} ring=[{:.3}, {:.3}] hits={n_hits} ({:.2}%)",
@@ -174,7 +210,7 @@ fn bench_payload_fetch_static(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("100B_string_payload", dims),
             &n_hits,
-            |b, _| b.iter(|| db.fetch_pods(&result.ids)),
+            |b, _| b.iter(|| db.fetch_pods(&ids)),
         );
     }
 
@@ -184,6 +220,7 @@ fn bench_payload_fetch_static(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_cpu_f32,
+    bench_cpu_disk_f32,
     bench_payload_fetch_dynamic,
     bench_payload_fetch_static
 );
