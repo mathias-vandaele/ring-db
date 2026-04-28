@@ -8,7 +8,7 @@ use crate::error::{Result, RingDbError};
 use crate::payload::{OwnedPayloadStore, Payload, PayloadBuilderOps, RefPayloadStore};
 use crate::persist::{read_f32_file, read_meta, write_f32_file, write_meta};
 use crate::query::Hit;
-use crate::query::{DiskQuery, QueryResult, RangeQuery, RingQuery};
+use crate::query::{DiskIntersectionQuery, DiskQuery, QueryResult, RangeQuery, RingQuery};
 
 fn into_hits(responses: Vec<crate::backend::QueryResponse>) -> Vec<Hit> {
     responses
@@ -315,6 +315,39 @@ impl<T: Payload> SealedRingDb<T> {
         }
         let t = Instant::now();
         let hits = into_hits(self.backend.disk_query_f32(dims, q.query, q.d_max)?);
+        Ok(QueryResult {
+            hits,
+            backend_used: self.backend.name(),
+            elapsed: t.elapsed(),
+        })
+    }
+
+    /// Execute a disk-intersection query: all vectors inside every disk.
+    ///
+    /// Returned hit distances are measured against the first disk.
+    pub fn query_disk_intersection(&self, q: &DiskIntersectionQuery<'_>) -> Result<QueryResult> {
+        let dims = self.config.dims;
+        if q.disks.is_empty() {
+            return Err(RingDbError::InvalidQuery(
+                "disk intersection requires at least one disk".to_string(),
+            ));
+        }
+        for disk in q.disks {
+            if disk.query.len() != dims {
+                return Err(RingDbError::DimensionMismatch {
+                    expected: dims,
+                    got: disk.query.len(),
+                });
+            }
+        }
+
+        let disks: Vec<(&[f32], f32)> = q
+            .disks
+            .iter()
+            .map(|disk| (disk.query, disk.d_max))
+            .collect();
+        let t = Instant::now();
+        let hits = into_hits(self.backend.disk_intersection_query_f32(dims, &disks)?);
         Ok(QueryResult {
             hits,
             backend_used: self.backend.name(),

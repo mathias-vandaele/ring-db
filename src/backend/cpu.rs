@@ -165,4 +165,51 @@ impl RingComputeBackend for CpuBackend {
             })
             .collect())
     }
+
+    fn disk_intersection_query_f32(
+        &self,
+        dims: usize,
+        disks: &[(&[f32], f32)],
+    ) -> Result<Vec<QueryResponse>> {
+        if self.n_vectors == 0 || disks.is_empty() {
+            return Ok(Vec::new());
+        }
+        for &(query, _) in disks {
+            if query.len() != dims {
+                return Err(RingDbError::DimensionMismatch {
+                    expected: dims,
+                    got: query.len(),
+                });
+            }
+        }
+
+        let prepared: Vec<(&[f32], f32, f32)> = disks
+            .iter()
+            .map(|&(query, d_max)| (query, norm_sq_f32(query), d_max * d_max))
+            .collect();
+
+        Ok(self
+            .vectors
+            .par_chunks_exact(dims)
+            .zip(self.norms_sq.par_iter())
+            .enumerate()
+            .filter_map(|(i, (row, &norm_sq_i))| {
+                let mut first_dist_sq = 0.0;
+                for (disk_i, &(query, norm_sq_q, upper_sq)) in prepared.iter().enumerate() {
+                    let dot = dot_f32(row, query);
+                    let dist_sq = norm_sq_i + norm_sq_q - 2.0 * dot;
+                    if dist_sq > upper_sq {
+                        return None;
+                    }
+                    if disk_i == 0 {
+                        first_dist_sq = dist_sq;
+                    }
+                }
+                Some(QueryResponse {
+                    id: i as u32,
+                    dist_sq: first_dist_sq,
+                })
+            })
+            .collect())
+    }
 }

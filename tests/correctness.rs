@@ -2,7 +2,10 @@
 ///
 /// These tests use hand-crafted vectors at known distances from a query so
 /// the expected result sets are computed analytically, not by another code path.
-use ringdb::{BackendPreference, DiskQuery, Payload, RangeQuery, RingDb, RingDbConfig, RingQuery};
+use ringdb::{
+    BackendPreference, DiskIntersectionQuery, DiskQuery, Payload, RangeQuery, RingDb, RingDbConfig,
+    RingDbError, RingQuery,
+};
 
 fn cpu_db(dims: usize) -> RingDb {
     RingDb::new(RingDbConfig::new(dims)).unwrap()
@@ -548,6 +551,109 @@ fn test_disk_equivalent_to_range_d_min_zero() {
         disk_ids, range_ids,
         "DiskQuery must equal RangeQuery(d_min=0)"
     );
+}
+
+#[test]
+fn test_disk_intersection_query_basic() {
+    let mut db = cpu_db(2);
+    db.add_vector(&[0.0f32, 0.0], ()).unwrap(); // inside first disk only
+    db.add_vector(&[1.0, 0.0], ()).unwrap(); // inside both
+    db.add_vector(&[2.0, 0.0], ()).unwrap(); // on first boundary, inside second
+    db.add_vector(&[3.0, 0.0], ()).unwrap(); // inside second disk only
+    db.add_vector(&[1.0, 1.0], ()).unwrap(); // inside first disk only
+    let db = db.build().unwrap();
+
+    let origin = [0.0f32, 0.0];
+    let right = [2.0f32, 0.0];
+    let disks = [
+        DiskQuery {
+            query: &origin,
+            d_max: 2.0,
+        },
+        DiskQuery {
+            query: &right,
+            d_max: 1.0,
+        },
+    ];
+    let result = db
+        .query_disk_intersection(&DiskIntersectionQuery { disks: &disks })
+        .unwrap();
+
+    let mut hits = result.hits;
+    hits.sort_by_key(|hit| hit.id);
+    let ids: Vec<u32> = hits.iter().map(|hit| hit.id).collect();
+    assert_eq!(ids, vec![1, 2], "only vectors inside both disks match");
+    assert!((hits[0].dist_sq - 1.0).abs() < 1e-6);
+    assert!((hits[1].dist_sq - 4.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_disk_intersection_query_no_results() {
+    let mut db = cpu_db(2);
+    db.add_vector(&[0.0f32, 0.0], ()).unwrap();
+    db.add_vector(&[10.0, 0.0], ()).unwrap();
+    let db = db.build().unwrap();
+
+    let left = [0.0f32, 0.0];
+    let right = [10.0f32, 0.0];
+    let disks = [
+        DiskQuery {
+            query: &left,
+            d_max: 1.0,
+        },
+        DiskQuery {
+            query: &right,
+            d_max: 1.0,
+        },
+    ];
+    let result = db
+        .query_disk_intersection(&DiskIntersectionQuery { disks: &disks })
+        .unwrap();
+
+    assert!(result.hits.is_empty());
+}
+
+#[test]
+fn test_disk_intersection_query_rejects_empty_disks() {
+    let db = cpu_db(2).build().unwrap();
+    let err = match db.query_disk_intersection(&DiskIntersectionQuery { disks: &[] }) {
+        Ok(_) => panic!("empty disk intersection should fail"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(err, RingDbError::InvalidQuery(_)));
+}
+
+#[test]
+fn test_disk_intersection_query_dimension_mismatch() {
+    let mut db = cpu_db(2);
+    db.add_vector(&[0.0f32, 0.0], ()).unwrap();
+    let db = db.build().unwrap();
+
+    let good = [0.0f32, 0.0];
+    let bad = [0.0f32, 0.0, 0.0];
+    let disks = [
+        DiskQuery {
+            query: &good,
+            d_max: 1.0,
+        },
+        DiskQuery {
+            query: &bad,
+            d_max: 1.0,
+        },
+    ];
+    let err = match db.query_disk_intersection(&DiskIntersectionQuery { disks: &disks }) {
+        Ok(_) => panic!("mismatched disk dimension should fail"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        RingDbError::DimensionMismatch {
+            expected: 2,
+            got: 3
+        }
+    ));
 }
 
 // ── Persistence tests ─────────────────────────────────────────────────────────

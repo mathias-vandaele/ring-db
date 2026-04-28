@@ -1,6 +1,9 @@
 /// Randomised sanity tests: no panics, valid IDs, no duplicates.
 use rand::{RngExt, SeedableRng};
-use ringdb::{DiskQuery, RangeQuery, RingDb, RingDbConfig, RingQuery, SealedRingDb};
+use ringdb::{
+    DiskIntersectionQuery, DiskQuery, RangeQuery, RingDb, RingDbConfig, RingQuery, SealedRingDb,
+};
+use std::collections::HashSet;
 
 fn random_db(dims: usize, n: usize, seed: u64) -> SealedRingDb {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
@@ -316,5 +319,68 @@ fn disk_equals_range_d_min_zero_random() {
     assert_eq!(
         disk_ids, range_ids,
         "DiskQuery must equal RangeQuery(d_min=0)"
+    );
+}
+
+#[test]
+fn disk_intersection_query_no_panic_small() {
+    let db = random_db(16, 50, 70);
+    let q1 = vec![0.0f32; 16];
+    let q2 = vec![0.25f32; 16];
+    let disks = [
+        DiskQuery {
+            query: &q1,
+            d_max: 3.0,
+        },
+        DiskQuery {
+            query: &q2,
+            d_max: 3.0,
+        },
+    ];
+    let r = db
+        .query_disk_intersection(&DiskIntersectionQuery { disks: &disks })
+        .unwrap();
+    assert_valid_result(&r.ids(), 50);
+}
+
+#[test]
+fn disk_intersection_matches_individual_disk_intersections_random() {
+    let dims = 32usize;
+    let n = 1_000usize;
+    let db = random_db(dims, n, 88);
+    let q1 = vec![0.0f32; dims];
+    let q2 = vec![0.2f32; dims];
+    let q3 = vec![-0.2f32; dims];
+    let disks = [
+        DiskQuery {
+            query: &q1,
+            d_max: 4.0,
+        },
+        DiskQuery {
+            query: &q2,
+            d_max: 4.25,
+        },
+        DiskQuery {
+            query: &q3,
+            d_max: 4.25,
+        },
+    ];
+
+    let intersection = db
+        .query_disk_intersection(&DiskIntersectionQuery { disks: &disks })
+        .unwrap();
+    let mut intersection_ids = intersection.ids();
+    intersection_ids.sort_unstable();
+
+    let mut expected_ids = db.query_disk(&disks[0]).unwrap().ids();
+    for disk in &disks[1..] {
+        let ids: HashSet<u32> = db.query_disk(disk).unwrap().ids().into_iter().collect();
+        expected_ids.retain(|id| ids.contains(id));
+    }
+    expected_ids.sort_unstable();
+
+    assert_eq!(
+        intersection_ids, expected_ids,
+        "disk intersection must equal the ID intersection of individual disk queries"
     );
 }

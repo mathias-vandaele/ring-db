@@ -51,6 +51,16 @@ pub struct DiskQuery<'a> {
     pub d_max: f32,
 }
 
+/// A disk-intersection query: find all vectors inside every disk.
+///
+/// Each disk is a [`DiskQuery`] containing a center vector and an inclusive
+/// radius. The query must contain at least one disk. Returned [`Hit::dist_sq`]
+/// values are measured against the first disk's query vector.
+pub struct DiskIntersectionQuery<'a> {
+    /// Disks that all returned vectors must satisfy.
+    pub disks: &'a [DiskQuery<'a>],
+}
+
 /// Result of a ring/range/disk query.
 pub struct QueryResult {
     /// All matching vectors together with their squared distances.

@@ -3,18 +3,20 @@
 A Rust library for **ring queries** in high-dimensional vector spaces.
 
 Instead of nearest-neighbour search, ring-db retrieves every vector whose
-Euclidean distance to a query falls inside a specified interval.  
-Three query shapes are supported out of the box:
+Euclidean distance to a query falls inside a specified interval or satisfies a
+set of disk constraints.  
+Four query shapes are supported out of the box:
 
 | Query type | Interval | Typical use |
 |---|---|---|
 | **`RingQuery`** | [d − λ, d + λ] | Hollow shell at distance d |
 | **`RangeQuery`** | [d_min, d_max] | Arbitrary distance band |
 | **`DiskQuery`** | [0, d_max] | Full ball / nearest-within-radius |
+| **`DiskIntersectionQuery`** | ∩ disks | Must be inside every disk |
 
 ```
-  RingQuery          RangeQuery          DiskQuery
-  ┌──── λ ───┐       ┌──────────┐        ┌──────────────┐
+  RingQuery          RangeQuery          DiskQuery          DiskIntersectionQuery
+  ┌──── λ ───┐       ┌──────────┐        ┌──────────────┐   disk A ∩ disk B ∩ …
   d ─────────── q    d_min  d_max  q     0      d_max   q
   └──────────┘
 ```
@@ -48,13 +50,15 @@ want to filter by it rather than rank by it. Nearest-neighbour returns a ranked
 list; a ring query returns a boolean membership set — every result satisfies the
 same geometric constraint.
 
-The three query types let you express the constraint directly:
+The four query types let you express the constraint directly:
 
 - **`RingQuery`** — symmetric band defined by a centre distance `d` and
   half-width `λ`: interval `[d-λ, d+λ]`.
 - **`RangeQuery`** — arbitrary interval `[d_min, d_max]`, no conversion needed.
 - **`DiskQuery`** — full ball of radius `d_max`, equivalent to
   `RangeQuery { d_min: 0, d_max }`.
+- **`DiskIntersectionQuery`** — multiple `DiskQuery` constraints; a vector is
+  returned only if it lies inside every disk.
 
 Internally, the library avoids computing square roots by working with squared
 L2 distances:
@@ -89,8 +93,8 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-ring-db = "0.4"
-ring-db-derive = "0.4"
+ring-db = "0.5"
+ring-db-derive = "0.5"
 serde = { version = "1", features = ["derive"] }   # only needed for serde payloads
 bytemuck = { version = "1", features = ["derive"] } # only needed for pod payloads
 ```
@@ -156,6 +160,38 @@ let result = db.query_disk(&DiskQuery {
     query: &[0.0f32; 4],
     d_max: 5.0,
 }).unwrap();
+```
+
+### Disk intersection query — inside every disk
+
+```rust
+use ringdb::{DiskIntersectionQuery, DiskQuery, RingDb, RingDbConfig};
+
+let mut db = RingDb::new(RingDbConfig::new(2)).unwrap();
+db.add_vector(&[0.0f32, 0.0], ()).unwrap();
+db.add_vector(&[1.0, 0.0], ()).unwrap();
+db.add_vector(&[2.0, 0.0], ()).unwrap();
+db.add_vector(&[3.0, 0.0], ()).unwrap();
+let db = db.build().unwrap();
+
+let left = [0.0f32, 0.0];
+let right = [2.0f32, 0.0];
+let disks = [
+    DiskQuery {
+        query: &left,
+        d_max: 2.0,
+    },
+    DiskQuery {
+        query: &right,
+        d_max: 1.0,
+    },
+];
+
+let result = db
+    .query_disk_intersection(&DiskIntersectionQuery { disks: &disks })
+    .unwrap();
+
+let ids = result.ids(); // vectors inside both disks: [1, 2]
 ```
 
 ---
@@ -296,6 +332,7 @@ Vectors are assigned sequential IDs starting from **0** in insertion order.
 | `query(q: &RingQuery)` | Ring query: interval `[d-λ, d+λ]`. |
 | `query_range(q: &RangeQuery)` | Range query: explicit `[d_min, d_max]`. |
 | `query_disk(q: &DiskQuery)` | Disk query: full ball `[0, d_max]`. |
+| `query_disk_intersection(q: &DiskIntersectionQuery)` | Disk intersection: all disks must contain the vector. |
 | `fetch_payload(id)` | Deserialize the payload for a single ID (serde or pod). |
 | `fetch_payloads(ids)` | Deserialize payloads for a slice of IDs, in order. |
 | `fetch_pod(id)` | **Pod only** — zero-copy `&T` reference into the mmap for a single ID. |
@@ -353,6 +390,18 @@ DiskQuery {
 // Equivalent to RangeQuery { d_min: 0.0, d_max }
 ```
 
+### `DiskIntersectionQuery<'a>`
+
+```
+DiskIntersectionQuery {
+    disks: &[DiskQuery], // non-empty list of disk constraints
+}
+```
+
+Every disk query vector must have length equal to `dims`. The result contains
+only vectors whose distance to each disk center is at most that disk's `d_max`.
+`Hit::dist_sq` is measured against the first disk's query vector.
+
 ### `QueryResult`
 
 ```
@@ -385,6 +434,7 @@ pub enum RingDbError {
     Payload(String),   // serialization / deserialization error
     Io(std::io::Error),
     Corrupt(String),   // missing / inconsistent persistence files
+    InvalidQuery(String),
 }
 ```
 
@@ -550,17 +600,24 @@ pub trait RingComputeBackend: Send + Sync {
     // Default impl delegates to ring_query_f32; backends can override for a
     // tighter loop that skips the lower-bound comparison entirely.
     fn disk_query_f32(&self, dims: usize, query: &[f32], d_max: f32) -> Result<Vec<Hit>> { … }
+
+    // Disk intersection search: returns all vectors inside every disk.
+    // Default impl intersects ordinary disk-query IDs; backends can override
+    // for a single-pass implementation.
+    fn disk_intersection_query_f32(&self, dims: usize, disks: &[(&[f32], f32)]) -> Result<Vec<Hit>> { … }
 }
 ```
 
 `query` and `query_range` delegate to `ring_query_f32`. `query_disk` delegates
 to `disk_query_f32`, which the CPU backend overrides to remove the
 `dist_sq >= lower_sq` branch — a small but measurable saving when scanning
-hundreds of millions of vectors.
+hundreds of millions of vectors. `query_disk_intersection` delegates to
+`disk_intersection_query_f32`; the CPU backend overrides this with a single scan
+that evaluates every disk for each candidate row.
 
 New backends (WGPU, CUDA, AVX-512 hand-rolled) can be added without touching
-the public API. Backends that do not override `disk_query_f32` get the
-ring-delegating default for free.
+the public API. Backends that do not override `disk_query_f32` or
+`disk_intersection_query_f32` get the default behavior for free.
 
 ### CPU backend implementation
 
@@ -576,6 +633,9 @@ ring-delegating default for free.
 - **Dedicated disk path** — `disk_query_f32` removes the lower-bound
   comparison (`dist_sq >= 0`) that is always true, giving the branch predictor
   one fewer condition to evaluate per vector.
+- **Dedicated disk-intersection path** — `disk_intersection_query_f32` prepares
+  the disk norms and squared radii once, then scans the dataset once and exits
+  each row early as soon as any disk fails.
 
 ---
 
@@ -629,6 +689,7 @@ cargo bench
 # Single group
 cargo bench --bench query_backends cpu_f32
 cargo bench --bench query_backends cpu_disk_f32
+cargo bench --bench query_backends cpu_disk_intersection_f32
 cargo bench --bench query_backends payload_fetch
 
 # With native CPU optimisations (recommended)
@@ -699,6 +760,7 @@ Results:
 - [x] Persistent on-disk format (`build()` writes, `RingDb::load()` rehydrates)
 - [x] `#[derive(Payload)]` macro — serde and pod storage strategies
 - [x] Zero-copy Pod payload fetch (`fetch_pod` / `fetch_pods`)
+- [x] Disk intersection primitive (`query_disk_intersection`)
 - [ ] Python bindings (PyO3)
 
 ---

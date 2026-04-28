@@ -30,7 +30,7 @@ pub use config::{BackendPreference, RingDbConfig};
 pub use engine::{RingDb, SealedRingDb};
 pub use error::RingDbError;
 pub use payload::{OwnedPayloadStore, Payload, RefPayloadStore};
-pub use query::{DiskQuery, Hit, QueryResult, RangeQuery, RingQuery};
+pub use query::{DiskIntersectionQuery, DiskQuery, Hit, QueryResult, RangeQuery, RingQuery};
 
 // Re-export the derive macro so users write `use ringdb::Payload` for both
 // the trait and the derive, mirroring the serde pattern.

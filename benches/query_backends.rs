@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::{RngExt, SeedableRng};
-use ringdb::{DiskQuery, Payload, RingDb, RingDbConfig, RingQuery};
+use ringdb::{DiskIntersectionQuery, DiskQuery, Payload, RingDb, RingDbConfig, RingQuery};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -98,6 +98,66 @@ fn bench_cpu_disk_f32(c: &mut Criterion) {
                     d_max,
                 })
                 .unwrap()
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_cpu_disk_intersection_f32(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cpu_disk_intersection_f32");
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    group.sample_size(20);
+
+    for &dims in &[64usize, 128usize] {
+        // Same scale as the disk bench. The shifted centers keep the disks
+        // meaningfully overlapping while still forcing every disk check.
+        let d_max = ((2.0 * dims as f32) / 3.0).sqrt();
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(SEED);
+        let mut buf = vec![0.0f32; dims];
+
+        let mut db = RingDb::new(RingDbConfig::new(dims)).unwrap();
+        for _ in 0..N {
+            for x in buf.iter_mut() {
+                *x = rng.random_range(-1.0f32..1.0);
+            }
+            db.add_vector(&buf, ()).unwrap();
+        }
+        let db = db.build().unwrap();
+
+        let query_a: Vec<f32> = {
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(SEED + 1);
+            (0..dims).map(|_| rng.random_range(-1.0f32..1.0)).collect()
+        };
+        let mut query_b = query_a.clone();
+        for x in &mut query_b {
+            *x += 0.01;
+        }
+        let mut query_c = query_a.clone();
+        for x in &mut query_c {
+            *x -= 0.01;
+        }
+        let disks = [
+            DiskQuery {
+                query: &query_a,
+                d_max,
+            },
+            DiskQuery {
+                query: &query_b,
+                d_max,
+            },
+            DiskQuery {
+                query: &query_c,
+                d_max,
+            },
+        ];
+
+        group.bench_with_input(BenchmarkId::from_parameter(dims), &dims, |b, _| {
+            b.iter(|| {
+                db.query_disk_intersection(&DiskIntersectionQuery { disks: &disks })
+                    .unwrap()
             });
         });
     }
@@ -227,6 +287,7 @@ criterion_group!(
     benches,
     bench_cpu_f32,
     bench_cpu_disk_f32,
+    bench_cpu_disk_intersection_f32,
     bench_payload_fetch_dynamic,
     bench_payload_fetch_static
 );
